@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://github.com/ningnuo-dot/AgentProxyHub/releases/download/v1.0.0/icon.png" width="128" height="128" alt="AgentProxyHub Logo" />
+![AgentProxyHub Logo](assets/icon.png)
 
 # AgentProxyHub
 
