@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/ningnuo-dot/AgentProxyHub/main/assets/icon.png" width="128" height="128" alt="AgentProxyHub Logo" />
+<img src="https://github.com/ningnuo-dot/AgentProxyHub/releases/download/v1.0.0/icon.png" width="128" height="128" alt="AgentProxyHub Logo" />
 
 # AgentProxyHub
 
 **Intelligent Multi-Port Proxy Distribution Hub Tailored for AI Agents, Anti-Detect Browsers & Multi-Account Matrices**
 
-[![GitHub Release](https://img.shields.io/github/v/release/ningnuo-dot/AgentProxyHub?style=flat-square&color=blue)](https://github.com/ningnuo-dot/AgentProxyHub/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.0-3b82f6.svg?style=flat-square)](https://github.com/ningnuo-dot/AgentProxyHub/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-slate.svg?style=flat-square)](README_EN.md)
 [![MCP Ready](https://img.shields.io/badge/Protocol-Model%20Context%20Protocol%20(MCP)-purple.svg?style=flat-square)](mcp/server.py)
