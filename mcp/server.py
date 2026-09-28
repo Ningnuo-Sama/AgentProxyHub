@@ -24,8 +24,30 @@ BINDINGS_FILE = os.path.join(DATA_DIR, "bindings.json")
 # 兼容回退读取本地生产数据
 FALLBACK_NODES = "D:\\Program Files\\FengWoBridge\\nodes.json"
 
+# 跨进程账本锁：MCP 可能被多个 Agent 客户端各拉一个实例（人手一个），
+# 加上 CloakMulti GUI 共写 bindings.json，读-改-写必须整段持锁防丢更新。
+BINDINGS_LOCK = os.path.join(DATA_DIR, "bindings.lock")
+
+import contextlib
+
+@contextlib.contextmanager
+def _bindings_lock():
+    import msvcrt
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BINDINGS_LOCK, "a+b") as lf:
+        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lf.seek(0)
+            msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+
 def get_nodes_data() -> Dict[str, Any]:
-    """读取测绘节点数据"""
+    """读取测绘节点数据。
+
+    data/nodes.json 是合并超集（蜂窝源 + 星辰池由 core/ingest_xingchen.py 刷新），
+    存在即优先；缺失时回退蜂窝运行副本。
+    """
     path = NODES_FILE if os.path.exists(NODES_FILE) else FALLBACK_NODES
     if os.path.exists(path):
         try:
@@ -56,9 +78,12 @@ def get_bindings_data() -> Dict[str, Any]:
     return {}
 
 def save_bindings_data(data: Dict[str, Any]):
+    # 原子写：tmp + os.replace，读方即使不持锁也看不到半截 JSON
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BINDINGS_FILE, "w", encoding="utf-8") as f:
+    tmp = BINDINGS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, BINDINGS_FILE)
 
 # ==============================================================================
 # 工具实现函数
@@ -188,20 +213,21 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
     if not profile or not port:
         return {"success": False, "error": "必须提供 profile 和 port 参数"}
 
-    bindings = get_bindings_data()
-    old = bindings.get(str(port))
-    if old and old.get("profile") != profile:
-        return {
-            "success": False,
-            "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
-        }
+    with _bindings_lock():
+        bindings = get_bindings_data()
+        old = bindings.get(str(port))
+        if old and old.get("profile") != profile:
+            return {
+                "success": False,
+                "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
+            }
 
-    bindings[str(port)] = {
-        "profile": profile,
-        "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "note": note
-    }
-    save_bindings_data(bindings)
+        bindings[str(port)] = {
+            "profile": profile,
+            "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": note
+        }
+        save_bindings_data(bindings)
 
     return {
         "success": True,
