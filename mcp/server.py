@@ -97,6 +97,10 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
 
     matched = []
     for n in nodes:
+        port = n.get("port")
+        if not port:
+            continue  # 无端口的测绘记录不可用，跳过而不是在后面崩掉
+
         # 1. 评分过滤
         rating = (n.get("healthRating") or "F").upper()
         if tier_weight.get(rating, -1) < min_w:
@@ -134,7 +138,6 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
         if not is_ok:
             continue
 
-        port = n.get("port")
         http_port = n.get("httpPort") or (port + 10000)
         bound = bindings.get(str(port))
 
@@ -153,8 +156,8 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
             "bound_profile": bound.get("profile") if bound else None
         })
 
-    # 排序：未锁定的在前，按健康分降序
-    matched.sort(key=lambda x: (not x["is_locked"], x["health_score"]), reverse=True)
+    # 排序：未锁定的在前，按健康分降序；healthScore 缺失按 0 处理，避免 None 比较崩溃
+    matched.sort(key=lambda x: (not x["is_locked"], x["health_score"] or 0), reverse=True)
     return {
         "scene": scene,
         "total_matched": len(matched),
@@ -177,7 +180,7 @@ def tool_get_proxy_command(args: Dict[str, Any]) -> Any:
     }
 
 def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
-    """将环境/Profile 与指定端口绑定，锁定 IP 粘性"""
+    """将环境/Profile 与指定端口绑定，锁定 IP 粘性。端口已属于其他环境时拒绝，不静默抢占。"""
     profile = args.get("profile")
     port = args.get("port")
     note = args.get("note", "")
@@ -186,6 +189,13 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
         return {"success": False, "error": "必须提供 profile 和 port 参数"}
 
     bindings = get_bindings_data()
+    old = bindings.get(str(port))
+    if old and old.get("profile") != profile:
+        return {
+            "success": False,
+            "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
+        }
+
     bindings[str(port)] = {
         "profile": profile,
         "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -209,32 +219,70 @@ def tool_get_profile_bindings(args: Dict[str, Any]) -> Any:
         "bindings": bindings
     }
 
-def tool_test_proxy_target(args: Dict[str, Any]) -> Any:
-    """现场测试指定端口对某 URL 的连通状态"""
-    port = args.get("port", 21001)
-    target = args.get("target", "https://api.anthropic.com")
-    
-    t0 = time.time()
+def _socks5_connect(listen: str, port: int, host: str, tport: int, timeout: float = 6.0) -> None:
+    """极简 SOCKS5 客户端：无鉴权握手 + 域名 CONNECT，链路真实打通才返回。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     try:
+        s.connect((listen, int(port)))
+        s.sendall(b"\x05\x01\x00")  # 问候：无鉴权
+        resp = s.recv(2)
+        if len(resp) < 2 or resp[0] != 5:
+            raise OSError(f"非 SOCKS5 应答: {resp!r}")
+        if resp[1] != 0:
+            raise OSError(f"出口要求鉴权（method=0x{resp[1]:02x}），本地池应为免鉴权端口")
+        addr = host.encode("idna") if all(ord(c) < 128 for c in host) else host.encode("utf-8")
+        req = b"\x05\x01\x00\x03" + bytes([len(addr)]) + addr + int(tport).to_bytes(2, "big")
+        s.sendall(req)
+        rep = s.recv(10)
+        if len(rep) < 2 or rep[0] != 5:
+            raise OSError(f"CONNECT 应答异常: {rep!r}")
+        if rep[1] != 0:
+            reasons = {1: "一般性失败", 2: "规则不允许", 3: "网络不可达", 4: "主机不可达", 5: "连接被拒", 6: "TTL 过期", 7: "不支持的目标地址"}
+            raise OSError(f"出口连接目标失败(rep={rep[1]}): {reasons.get(rep[1], '未知')}")
+    finally:
+        s.close()
+
+
+def tool_test_proxy_target(args: Dict[str, Any]) -> Any:
+    """真实穿 SOCKS5 链路测试端口对目标的连通性（不再只测本地 TCP 存活）。"""
+    from urllib.parse import urlparse
+
+    port = int(args.get("port", 21001))
+    target = args.get("target", "https://api.anthropic.com")
+
+    t0 = time.time()
+    u = urlparse(target if "//" in target else f"https://{target}")
+    thost = u.hostname or "api.anthropic.com"
+    tport = u.port or (443 if u.scheme == "https" else 80)
+
+    try:
+        # 先确认本地端口在监听
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(4.0)
-        s.connect(("127.0.0.1", int(port)))
+        s.connect(("127.0.0.1", port))
         s.close()
-        latency = int((time.time() - t0) * 1000)
+    except Exception as e:
+        return {"port": port, "target": target, "alive": False, "error": f"本地端口不通: {e}"}
+
+    try:
+        _socks5_connect("127.0.0.1", port, thost, tport)
         return {
             "port": port,
             "target": target,
             "alive": True,
-            "latency_ms": latency,
-            "status": "Port is listening and accessible"
+            "verified": True,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "status": f"SOCKS5 链路已真实打通 {thost}:{tport}"
         }
     except Exception as e:
         return {
             "port": port,
             "target": target,
             "alive": False,
-            "latency_ms": -1,
-            "error": str(e)
+            "verified": False,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "error": str(e)[:200]
         }
 
 # ==============================================================================
@@ -336,6 +384,10 @@ def main():
         req_id = req.get("id")
         method = req.get("method")
         params = req.get("params") or {}
+
+        # notification（无 id）按协议不得回复，回了一条带 null id 的 result 会让部分客户端报错
+        if req_id is None:
+            continue
 
         if method == "initialize":
             res = {
