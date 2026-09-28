@@ -1,0 +1,92 @@
+[
+  {
+    "id": "antigravity",
+    "name": "✨ 反重力 / Gemini (Google原生支持)",
+    "name_en": "✨ Antigravity / Gemini (Google Native)",
+    "chip": "Gemini ✅",
+    "chipBg": "#1B432C",
+    "chipFg": "#5FD08A",
+    "desc": "Google 官方认证地区，未送中，原生支持 Antigravity 与 Flow",
+    "targetUrl": "https://policies.google.com/terms",
+    "probeType": "google_country",
+    "allowedCountries": [
+      "United States", "Japan", "United Kingdom", "Canada", "Germany",
+      "France", "Taiwan", "Singapore", "Australia", "Spain", "Mexico",
+      "Italy", "Switzerland", "Netherlands", "Sweden", "Poland"
+    ],
+    "excludeCountries": ["China", "Hong Kong"],
+    "requireResidential": false,
+    "maxLatencyMs": 800,
+    "matchKey": "antigravitySupported"
+  },
+  {
+    "id": "claude",
+    "name": "🟣 Claude 专属 (Anthropic直连免阻断)",
+    "name_en": "🟣 Claude Exclusive (Anthropic Direct)",
+    "chip": "Claude ✅",
+    "chipBg": "#3B1E4A",
+    "chipFg": "#C77DFF",
+    "desc": "直连 api.anthropic.com，无 Cloudflare 1020/403 阻断，地区纯净",
+    "targetUrl": "https://api.anthropic.com",
+    "probeType": "http_status_not_blocked",
+    "allowedCountries": [
+      "United States", "Japan", "United Kingdom", "Canada", "Germany",
+      "France", "Taiwan", "Singapore", "Australia"
+    ],
+    "excludeCountries": ["China", "Hong Kong", "Russia"],
+    "requireResidential": false,
+    "maxLatencyMs": 600,
+    "matchKey": "claudeSupported"
+  },
+  {
+    "id": "openai",
+    "name": "🟢 ChatGPT / OpenAI (API+Web高速畅通)",
+    "name_en": "🟢 ChatGPT / OpenAI (API+Web High-Speed)",
+    "chip": "OpenAI ✅",
+    "chipBg": "#1A3A2A",
+    "chipFg": "#4EBA6F",
+    "desc": "直连 api.openai.com/v1/models，返回 401 畅通且未拦截，延迟低",
+    "targetUrl": "https://api.openai.com/v1/models",
+    "probeType": "http_status_ok_or_auth",
+    "allowedCountries": [
+      "United States", "Japan", "United Kingdom", "Canada", "Germany",
+      "France", "Taiwan", "Singapore", "Australia", "South Korea"
+    ],
+    "excludeCountries": ["China", "Hong Kong", "Russia"],
+    "requireResidential": false,
+    "maxLatencyMs": 500,
+    "matchKey": "openaiSupported"
+  },
+  {
+    "id": "facebook",
+    "name": "🔵 Facebook / 海外社媒 (原生住宅防封)",
+    "name_en": "🔵 Facebook / Social Media (Residential Anti-Ban)",
+    "chip": "FB住宅 ✅",
+    "chipBg": "#1E2E4A",
+    "chipFg": "#70A1FF",
+    "desc": "严格筛选真实家宽住宅 IP，非机房，非池内冲突重复出口，防风控防封号",
+    "targetUrl": "https://www.facebook.com",
+    "probeType": "residential_only",
+    "allowedCountries": [],
+    "excludeCountries": ["China", "Hong Kong"],
+    "requireResidential": true,
+    "maxLatencyMs": 800,
+    "matchKey": "facebookSupported"
+  },
+  {
+    "id": "general",
+    "name": "⚡ 全局极速大带宽 (流媒体/下载直连)",
+    "name_en": "⚡ Global High-Speed (Streaming & Download)",
+    "chip": "极速 ✅",
+    "chipBg": "#2A2A38",
+    "chipFg": "#9E9EAF",
+    "desc": "实测出口在线，不限机房/住宅，延迟低，适合大文件下载、Git 与日常流媒体",
+    "targetUrl": "http://api.ipify.org",
+    "probeType": "latency_under_ms",
+    "allowedCountries": [],
+    "excludeCountries": ["China"],
+    "requireResidential": false,
+    "maxLatencyMs": 400,
+    "matchKey": "generalSupported"
+  }
+]
