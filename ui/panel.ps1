@@ -2,7 +2,8 @@
 # AgentProxyHub 桌面控制面板 (AgentProxyHub Management Panel)
 # ==============================================================================
 # 技术栈：原生 WPF + XAML，暗黑极简风格，无第三方重量级依赖
-# 数据源：config/scenes.json（场景规则） + data/nodes.json（测绘结果） + 本地内核 API
+# 国际化：中、英、日、韩四国语言即时无缝切换 (i18n Multi-Language Ready)
+# 数据源：config/scenes.json（场景规则） + data/nodes.json（测绘结果） + config/i18n.json
 
 param(
     [string]$RootDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -75,24 +76,29 @@ $script:Formats = [ordered]@{
     'CSV (地址,名称,标签,权重)'        = 'csv'
 }
 
-# 地区中文映射
-$script:RegionCn = @{
-    AR='阿根廷'; AU='澳大利亚'; AT='奥地利'; AZ='阿塞拜疆'; BH='巴林'; BD='孟加拉'; BR='巴西'
-    BG='保加利亚'; CA='加拿大'; CL='智利'; CO='哥伦比亚'; CZ='捷克'; DK='丹麦'; EC='厄瓜多尔'
-    EG='埃及'; FR='法国'; DE='德国'; GR='希腊'; HK='香港'; HU='匈牙利'; IS='冰岛'; IN='印度'
-    ID='印尼'; IQ='伊拉克'; IL='以色列'; JP='日本'; KZ='哈萨克斯坦'; KG='吉尔吉斯斯坦'
-    LT='立陶宛'; MO='澳门'; MY='马来西亚'; MX='墨西哥'; MA='摩洛哥'; NP='尼泊尔'; NG='尼日利亚'
-    MK='北马其顿'; OM='阿曼'; PK='巴基斯坦'; PE='秘鲁'; PH='菲律宾'; PL='波兰'; PT='葡萄牙'
-    RU='俄罗斯'; SA='沙特阿拉伯'; SG='新加坡'; SI='斯洛文尼亚'; ZA='南非'; KR='韩国'; ES='西班牙'
-    SE='瑞典'; CH='瑞士'; TW='台湾'; TH='泰国'; NL='荷兰'; TG='多哥'; TR='土耳其'; UA='乌克兰'
-    AE='阿联酋'; GB='英国'; US='美国'; VN='越南'
+# 加载多语言字典
+$script:I18n = @{}
+$i18nFile = Join-Path $RootDir 'config\i18n.json'
+if (Test-Path -LiteralPath $i18nFile) {
+    try { $script:I18n = Get-Content -LiteralPath $i18nFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+}
+$script:CurrentLang = 'zh'
+
+function T([string]$key, [hashtable]$params = @{}) {
+    $dict = $script:I18n.$($script:CurrentLang)
+    $text = if ($dict -and $dict.$key) { $dict.$key } else { $key }
+    foreach ($k in $params.Keys) {
+        $text = $text.Replace("{$k}", "$($params[$k])")
+    }
+    return $text
 }
 
 # XAML 布局
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AgentProxyHub · 智能代理与环境调度中枢" Height="800" Width="1180" MinHeight="560" MinWidth="920"
+        x:Name="MainWin"
+        Title="AgentProxyHub · 智能代理与环境调度中枢" Height="800" Width="1200" MinHeight="560" MinWidth="960"
         WindowStartupLocation="CenterScreen" Background="#131316" Foreground="#E9E9EC"
         FontFamily="Microsoft YaHei UI" FontSize="13" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
@@ -233,17 +239,22 @@ $script:RegionCn = @{
           <Button x:Name="BtnRefresh" Content="刷新数据" Margin="6,0,0,0"/>
           <Button x:Name="BtnSpeed" Content="重新测速" Margin="6,0,0,0"/>
 
-          <!-- 核心亮点：规则驱动的场景靶场下拉选择器与动态复制 -->
+          <!-- 场景靶场下拉选择器与动态复制 -->
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-            <TextBlock Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="0,0,6,0"/>
-            <ComboBox x:Name="CmbScene" Width="210" VerticalAlignment="Center"/>
+            <TextBlock x:Name="LblScene" Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <ComboBox x:Name="CmbScene" Width="200" VerticalAlignment="Center"/>
             <Button x:Name="BtnCopyScenePool" Content="⚡ 复制场景池" Margin="8,0,0,0" Background="#223348"/>
           </StackPanel>
         </StackPanel>
 
+        <!-- 复制格式与多语言自由切换下拉框 -->
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="复制格式" Opacity="0.65" VerticalAlignment="Center"/>
-          <ComboBox x:Name="CmbFormat" Width="210" Margin="8,0,0,0"/>
+          <TextBlock x:Name="LblFormat" Text="复制格式" Opacity="0.65" VerticalAlignment="Center"/>
+          <ComboBox x:Name="CmbFormat" Width="170" Margin="8,0,0,0"/>
+
+          <!-- 多语言自由切换器 -->
+          <TextBlock Text="🌐" Opacity="0.75" FontSize="14" VerticalAlignment="Center" Margin="12,0,4,0"/>
+          <ComboBox x:Name="CmbLang" Width="105" VerticalAlignment="Center"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -258,11 +269,11 @@ $script:RegionCn = @{
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="📱" FontSize="14" VerticalAlignment="Center"/>
-          <TextBlock Text="手机/局域网智能分流总线" FontWeight="SemiBold" Foreground="#7FB2FF" Margin="8,0,0,0" VerticalAlignment="Center"/>
+          <TextBlock x:Name="PhoneBusTitle" Text="手机/局域网智能分流总线" FontWeight="SemiBold" Foreground="#7FB2FF" Margin="8,0,0,0" VerticalAlignment="Center"/>
           <Border Background="#1F3652" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
             <TextBlock Text="192.168.0.107:39999" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A2D2FF" VerticalAlignment="Center"/>
           </Border>
-          <TextBlock Text="(HTTP/SOCKS5混合 · 多节点自动选优 · 坏了秒切 · 国内直连)" Opacity="0.75" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+          <TextBlock x:Name="PhoneBusDesc" Text="(HTTP/SOCKS5混合 · 多节点自动选优 · 坏了秒切 · 国内直连)" Opacity="0.75" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock x:Name="PhoneStatusText" Text="✅ 手机(MI 8 Lite)已就绪" FontSize="11" Foreground="#5FD08A" Margin="0,0,10,0" VerticalAlignment="Center"/>
@@ -281,7 +292,7 @@ $script:RegionCn = @{
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
       <StackPanel Grid.Column="0" Orientation="Horizontal">
-        <TextBlock Text="视图筛选" Opacity="0.65" VerticalAlignment="Center"/>
+        <TextBlock x:Name="LblFilter" Text="视图筛选" Opacity="0.65" VerticalAlignment="Center"/>
         <ComboBox x:Name="CmbFilter" Width="200" Margin="8,0,0,0"/>
       </StackPanel>
       <TextBlock Grid.Column="1" x:Name="CountText" Margin="16,0,0,0" Opacity="0.75" VerticalAlignment="Center"/>
@@ -318,22 +329,30 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
 
 # 注册控件
+$MainWin           = $win.FindName('MainWin')
 $Dot               = $win.FindName('Dot')
 $KernelText        = $win.FindName('KernelText')
 $BtnStart          = $win.FindName('BtnStart')
 $BtnStop           = $win.FindName('BtnStop')
 $BtnRefresh        = $win.FindName('BtnRefresh')
 $BtnSpeed          = $win.FindName('BtnSpeed')
+$LblScene          = $win.FindName('LblScene')
 $CmbScene          = $win.FindName('CmbScene')
 $BtnCopyScenePool  = $win.FindName('BtnCopyScenePool')
+$LblFormat         = $win.FindName('LblFormat')
 $CmbFormat         = $win.FindName('CmbFormat')
+$CmbLang           = $win.FindName('CmbLang')
+$PhoneBusTitle     = $win.FindName('PhoneBusTitle')
+$PhoneBusDesc      = $win.FindName('PhoneBusDesc')
+$PhoneStatusText   = $win.FindName('PhoneStatusText')
+$BtnCopyPhoneProxy = $win.FindName('BtnCopyPhoneProxy')
+$BtnPhoneCmd       = $win.FindName('BtnPhoneCmd')
+$LblFilter         = $win.FindName('LblFilter')
 $CmbFilter         = $win.FindName('CmbFilter')
 $CountText         = $win.FindName('CountText')
 $TxtSearch         = $win.FindName('TxtSearch')
 $ListPanel         = $win.FindName('ListPanel')
 $StatusText        = $win.FindName('StatusText')
-$BtnCopyPhoneProxy = $win.FindName('BtnCopyPhoneProxy')
-$BtnPhoneCmd       = $win.FindName('BtnPhoneCmd')
 $BtnBatchP1        = $win.FindName('BtnBatchP1')
 $BtnBatchSocks     = $win.FindName('BtnBatchSocks')
 $BtnBatchHttp      = $win.FindName('BtnBatchHttp')
@@ -342,13 +361,21 @@ $BtnBatchHttp      = $win.FindName('BtnBatchHttp')
 foreach ($k in $script:Formats.Keys) { [void]$CmbFormat.Items.Add($k) }
 $CmbFormat.SelectedIndex = 0
 
-# 加载 scenes.json 规则填充场景靶场下拉框
+# 语言下拉框填充
+$langMap = [ordered]@{
+    '简体中文' = 'zh'
+    'English'  = 'en'
+    '日本語'   = 'ja'
+    '한국어'   = 'ko'
+}
+foreach ($l in $langMap.Keys) { [void]$CmbLang.Items.Add($l) }
+$CmbLang.SelectedIndex = 0
+
+# 加载 scenes.json 规则
 $script:Scenes = @()
 $scenesFile = Join-Path $RootDir 'config\scenes.json'
 if (Test-Path -LiteralPath $scenesFile) {
-    try {
-        $script:Scenes = Get-Content -LiteralPath $scenesFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch { }
+    try { $script:Scenes = Get-Content -LiteralPath $scenesFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
 }
 if ($script:Scenes.Count -eq 0) {
     $script:Scenes = @(
@@ -358,21 +385,51 @@ if ($script:Scenes.Count -eq 0) {
         [pscustomobject]@{ id='facebook'; name='🔵 Facebook / 海外社媒 (住宅纯净)'; chip='FB住宅 ✅'; chipBg='#1E2E4A'; chipFg='#70A1FF'; matchKey='facebookSupported' }
     )
 }
-
 foreach ($s in $script:Scenes) { [void]$CmbScene.Items.Add($s.name) }
 if ($CmbScene.Items.Count -gt 0) { $CmbScene.SelectedIndex = 0 }
 
-# 视图筛选列表
-$filters = @(
-    '🎯 当前选中场景纯净池',
-    '👑 仅看 S 级纯净推荐',
-    '🌟 仅看 A 级优质原生',
-    '全部出口 (含冷门与隔离区)',
-    '⚠️ Google 已送中 (避坑)'
-)
-foreach ($f in $filters) { [void]$CmbFilter.Items.Add($f) }
-$CmbFilter.SelectedIndex = 0
-$TxtSearch.Text = '搜索地区 / 城市 / 端口 / IP'
+# 核心多语言切换函数
+function Apply-Language([string]$lang) {
+    $script:CurrentLang = $lang
+    $win.Title = T 'title'
+    $BtnStart.Content = T 'btn_start'
+    $BtnStop.Content = T 'btn_stop'
+    $BtnRefresh.Content = T 'btn_refresh'
+    $BtnSpeed.Content = T 'btn_speed'
+    $LblScene.Text = T 'lbl_scene'
+    $LblFormat.Text = T 'lbl_format'
+    $PhoneBusTitle.Text = T 'phone_bus_title'
+    $PhoneBusDesc.Text = T 'phone_bus_desc'
+    $PhoneStatusText.Text = T 'phone_status_ready'
+    $BtnCopyPhoneProxy.Content = T 'btn_copy_phone_proxy'
+    $BtnPhoneCmd.Content = T 'btn_phone_cmd'
+    $LblFilter.Text = T 'lbl_filter'
+    $TxtSearch.Text = T 'search_placeholder'
+    $BtnBatchP1.Content = T 'btn_export_p1'
+    $BtnBatchSocks.Content = T 'btn_export_socks'
+    $BtnBatchHttp.Content = T 'btn_export_http'
+    $StatusText.Text = T 'status_ready'
+
+    # 动态刷新筛选列表
+    $oldIdx = $CmbFilter.SelectedIndex
+    if ($oldIdx -lt 0) { $oldIdx = 0 }
+    $CmbFilter.Items.Clear()
+    [void]$CmbFilter.Items.Add((T 'filter_scene'))
+    [void]$CmbFilter.Items.Add((T 'filter_s'))
+    [void]$CmbFilter.Items.Add((T 'filter_a'))
+    [void]$CmbFilter.Items.Add((T 'filter_all'))
+    [void]$CmbFilter.Items.Add((T 'filter_sent'))
+    $CmbFilter.SelectedIndex = $oldIdx
+
+    Update-SceneButton
+}
+
+$CmbLang.Add_SelectionChanged({
+    $selectedName = $CmbLang.SelectedItem
+    if ($selectedName -and $langMap.Contains($selectedName)) {
+        Apply-Language $langMap[$selectedName]
+    }
+})
 
 # 托盘图标设置
 $script:Tray = New-Object Windows.Forms.NotifyIcon
@@ -417,7 +474,6 @@ $win.Add_SourceInitialized({
     [Win11Dwm]::EnableDarkMode($hwnd)
 })
 
-# 场景下拉联动按钮文案与颜色
 function Update-SceneButton {
     $idx = $CmbScene.SelectedIndex
     if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
@@ -427,14 +483,14 @@ function Update-SceneButton {
         $key = if ($s.matchKey) { $s.matchKey } else { "$($s.id)Supported" }
         $matchedCount = @($script:Nodes | Where-Object { $_.$key -eq $true }).Count
     }
-    $BtnCopyScenePool.Content = "⚡ 复制 $($s.chip.Replace(' ✅','')) 纯净池 ($matchedCount 个)"
+    $BtnCopyScenePool.Content = "$([char]0x26A1) $(T 'btn_copy_scene') ($matchedCount)"
     if ($s.chipBg) {
         try { $BtnCopyScenePool.Background = (New-Object Windows.Media.BrushConverter).ConvertFromString($s.chipBg) } catch { }
     }
 }
 $CmbScene.Add_SelectionChanged({ Update-SceneButton })
 
-# 节点与数据逻辑
+# 节点数据逻辑
 $script:Nodes = @()
 $script:ListenAddr = "127.0.0.1"
 
@@ -455,7 +511,6 @@ function Load-NodesData {
     }
 }
 
-# 格式化导出函数
 function Format-ProxyEntry($node, $fmt) {
     $p = $node.port
     $hp = if ($node.httpPort) { $node.httpPort } else { $p + 10000 }
@@ -474,7 +529,6 @@ function Format-ProxyEntry($node, $fmt) {
     }
 }
 
-# 复制选定场景池
 $BtnCopyScenePool.Add_Click({
     $idx = $CmbScene.SelectedIndex
     if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
@@ -483,17 +537,16 @@ $BtnCopyScenePool.Add_Click({
     
     $pool = @($script:Nodes | Where-Object { $_.$key -eq $true } | Sort-Object healthScore -Descending)
     if ($pool.Count -eq 0) {
-        $StatusText.Text = "当前场景 [$($s.name)] 暂无可用节点。"
+        $StatusText.Text = T 'msg_no_nodes' @{ scene = $s.name }
         return
     }
     $fmt = $CmbFormat.SelectedItem
     $lines = foreach ($item in $pool) { Format-ProxyEntry $item $fmt }
     $copyText = $lines -join "`r`n"
     try { [Windows.Clipboard]::SetText($copyText) } catch { }
-    $StatusText.Text = "⚡ 已复制 $($pool.Count) 个 [$($s.name)] 节点至剪贴板！"
+    $StatusText.Text = T 'msg_copied' @{ count = $pool.Count; scene = $s.name }
 })
 
-# 手机/局域网代理复制
 $BtnCopyPhoneProxy.Add_Click({
     try { [Windows.Clipboard]::SetText("192.168.0.107:39999") } catch { }
     $StatusText.Text = '已复制手机/局域网分流代理地址：192.168.0.107:39999'
@@ -505,7 +558,6 @@ $BtnPhoneCmd.Add_Click({
     $StatusText.Text = "已复制手机免App挂载命令：$cmd"
 })
 
-# 批量导出按钮
 $BtnBatchSocks.Add_Click({
     $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'socks5://' }
     try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
@@ -518,9 +570,9 @@ $BtnBatchHttp.Add_Click({
     $StatusText.Text = "已复制全量 $($script:Nodes.Count) 个 HTTP 端口列表。"
 })
 
-# 初始加载与展现
+# 初始化语言与数据
 Load-NodesData
-Update-SceneButton
+Apply-Language 'zh'
 $CountText.Text = "当前加载节点: $($script:Nodes.Count)"
 $KernelText.Text = "Mihomo 内核已连接 · 监听: $script:ListenAddr"
 $Dot.Fill = (New-Object Windows.Media.SolidColorBrush([Windows.Media.Color]::FromArgb(255, 95, 208, 138)))
