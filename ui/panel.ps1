@@ -1855,11 +1855,10 @@ if ($BtnPhoneCmd) {
     })
 }
 $BtnSpeed.Add_Click({
-    $StatusText.Text = '正在并发测速…'
-    Pump
-    $ok = Measure-Latency
-    Render
-    $StatusText.Text = "测速完成：$ok / $($script:Nodes.Count) 个节点有响应"
+    if (-not $script:Nodes.Count) { $StatusText.Text = '请先点「刷新数据」加载数据'; return }
+    Start-Latency
+    $script:LatTimer.Stop()
+    $script:LatTimer.Start()
 })
 
 $BtnExpand.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $true } })
@@ -1907,10 +1906,9 @@ try {
     if (Load-Nodes) {
         Render
         if (Test-Kernel) {
-            $StatusText.Text = "正在并发测速（80 个节点，约 3 秒）…"
-            $ok = Measure-Latency
-            Render
-            $StatusText.Text = "数据更新于 $($script:DataStamp)　测速成功 $ok / $($script:Nodes.Count)　未测到延迟的节点显示「—」，不代表不可用"
+            Start-Latency
+            $script:LatTimer.Stop()
+            $script:LatTimer.Start()
         } else {
             $StatusText.Text = "数据更新于 $($script:DataStamp)　内核未运行，延迟未测（点「启动内核」后会自动测速）"
         }
