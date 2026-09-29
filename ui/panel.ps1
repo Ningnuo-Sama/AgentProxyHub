@@ -1,15 +1,31 @@
-# ==============================================================================
-# AgentProxyHub 桌面控制面板 (AgentProxyHub Management Panel)
-# ==============================================================================
-# 技术栈：原生 WPF + XAML，暗黑极简风格，无第三方重量级依赖
-# 国际化：中、英、日、韩四国语言即时无缝切换 (i18n Multi-Language Ready)
-# 数据源：config/scenes.json（场景规则） + data/nodes.json（测绘结果） + config/i18n.json
+﻿# AgentProxyHub 桌面控制面板（WPF 原生窗口，无浏览器、无本地服务）
+# 由前身 FengWoBridge 的成熟面板移植而来（源：D:\GitHub\FengWoBridge panel.ps1 @193f000）
+# 数据来源：nodes.json（由 gen-report.ps1 生成）+ 内核控制 API（延迟测速）
+# 特性：按地区折叠分组、一环境一端口随取随用、蜂窝订阅刷新后自动同步、诚实标注未探测项
 
 param(
-    [string]$RootDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    [string]$Dir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
+    [ValidateSet('Export', 'Guard')]
+    [string]$View = 'Export'
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ---- AgentProxyHub 运行布局 ----------------------------------------------------
+# 前身 FengWoBridge 把节点/配置放在根目录，AgentProxyHub 分到 data\ 与 config\；
+# 差异集中在这两个解析函数里，找不到就回退根目录，保证两边都能跑。
+function Get-RunFile([string]$name) {
+    foreach ($sub in @('data', 'config', '')) {
+        $p = if ($sub) { Join-Path $Dir "$sub\$name" } else { Join-Path $Dir $name }
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    return (Join-Path $Dir $name)
+}
+function Get-CoreFile([string]$name) {
+    $p = Join-Path $Dir "core\$name"
+    if (Test-Path -LiteralPath $p) { return $p }
+    return (Join-Path $Dir $name)
+}
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -TypeDefinition @'
 using System;
@@ -23,10 +39,17 @@ public class Win11Dwm {
         if (hwnd == IntPtr.Zero) return;
         try {
             int trueVal = 1;
+            // DWMWA_USE_IMMERSIVE_DARK_MODE (20 for Win11/Win10 20H1+, 19 for older Win10)
             DwmSetWindowAttribute(hwnd, 20, ref trueVal, sizeof(int));
             DwmSetWindowAttribute(hwnd, 19, ref trueVal, sizeof(int));
-            if (captionColorBgr >= 0) { DwmSetWindowAttribute(hwnd, 35, ref captionColorBgr, sizeof(int)); }
-            if (textColorBgr >= 0) { DwmSetWindowAttribute(hwnd, 36, ref textColorBgr, sizeof(int)); }
+            if (captionColorBgr >= 0) {
+                // DWMWA_CAPTION_COLOR (35)
+                DwmSetWindowAttribute(hwnd, 35, ref captionColorBgr, sizeof(int));
+            }
+            if (textColorBgr >= 0) {
+                // DWMWA_TEXT_COLOR (36)
+                DwmSetWindowAttribute(hwnd, 36, ref textColorBgr, sizeof(int));
+            }
         } catch { }
     }
 }
@@ -39,14 +62,14 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 function Write-PanelEvent([string]$kind, [string]$detail = '') {
     try {
-        $logDir = Join-Path $RootDir 'logs'
+        $logDir = Join-Path $Dir 'logs'
         if (-not (Test-Path -LiteralPath $logDir)) { [void](New-Item -ItemType Directory -Path $logDir -Force) }
         $line = '{0} pid={1} {2} {3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $PID, $kind, ($detail -replace '[\r\n]+', ' ')
         Add-Content -LiteralPath (Join-Path $logDir 'panel.log') -Value $line -Encoding UTF8
     } catch { }
 }
 
-# 单实例互斥锁
+# 单实例
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\AgentProxyHubPanel')
 $acquired = $false
 try { $acquired = $script:mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $acquired = $true }
@@ -55,50 +78,126 @@ if (-not $acquired) {
         $signal = [System.Threading.EventWaitHandle]::OpenExisting('Local\AgentProxyHubPanelShow')
         [void]$signal.Set()
         $signal.Dispose()
+        if ($View -eq 'Guard') {
+            try {
+                $gsig = [System.Threading.EventWaitHandle]::OpenExisting('Local\AgentProxyHubPanelGuard')
+                [void]$gsig.Set()
+                $gsig.Dispose()
+            } catch { }
+        }
         Write-PanelEvent 'restore-requested'
     } catch {
-        [void][Windows.MessageBox]::Show('AgentProxyHub 面板已在后台运行，请从系统托盘打开。', 'AgentProxyHub')
+        Write-PanelEvent 'restore-request-failed' $_.Exception.Message
+        [void][Windows.MessageBox]::Show('面板已在运行，请从系统托盘打开。', 'AgentProxyHub')
     }
     $script:mutex.Dispose()
     exit
 }
 $script:ShowSignal = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, 'Local\AgentProxyHubPanelShow')
+$script:GuardSignal = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, 'Local\AgentProxyHubPanelGuard')
+# 命名事件若是复用的既有对象，initialState 会被忽略；这里显式复位，避免上一次残留的信号误触发换视图
+$script:ShowSignal.Reset()
+$script:GuardSignal.Reset()
 Write-PanelEvent 'started'
 
-# 复制格式列表
+# ---------------- 国家/地区中文名 ----------------
+$script:RegionCn = @{
+    AR='阿根廷'; AU='澳大利亚'; AT='奥地利'; AZ='阿塞拜疆'; BH='巴林'; BD='孟加拉'; BR='巴西'
+    BG='保加利亚'; CA='加拿大'; CL='智利'; CO='哥伦比亚'; CZ='捷克'; DK='丹麦'; EC='厄瓜多尔'
+    EG='埃及'; FR='法国'; DE='德国'; GR='希腊'; HK='香港'; HU='匈牙利'; IS='冰岛'; IN='印度'
+    ID='印尼'; IQ='伊拉克'; IL='以色列'; JP='日本'; KZ='哈萨克斯坦'; KG='吉尔吉斯斯坦'
+    LT='立陶宛'; MO='澳门'; MY='马来西亚'; MX='墨西哥'; MA='摩洛哥'; NP='尼泊尔'; NG='尼日利亚'
+    MK='北马其顿'; OM='阿曼'; PK='巴基斯坦'; PE='秘鲁'; PH='菲律宾'; PL='波兰'; PT='葡萄牙'
+    RU='俄罗斯'; SA='沙特阿拉伯'; SG='新加坡'; SI='斯洛文尼亚'; ZA='南非'; KR='韩国'; ES='西班牙'
+    SE='瑞典'; CH='瑞士'; TW='台湾'; TH='泰国'; NL='荷兰'; TG='多哥'; TR='土耳其'; UA='乌克兰'
+    AE='阿联酋'; GB='英国'; US='美国'; VN='越南'
+}
+
 $script:Formats = [ordered]@{
     'URI#名称 [标签] (FlowTools推荐)'  = 'flowtools_hash'
     'socks5h://'                       = 'socks5h://'
     'socks5://'                        = 'socks5://'
     'http://'                          = 'http://'
     'IP:端口'                          = 'raw'
+    'URI#名称|标签|权重'                = 'flowtools_pipe'
     'JSON 数组 (全字段无损)'            = 'json'
     'CSV (地址,名称,标签,权重)'        = 'csv'
 }
 
-# 加载多语言字典
-$script:I18n = @{}
-$i18nFile = Join-Path $RootDir 'config\i18n.json'
-if (Test-Path -LiteralPath $i18nFile) {
-    try { $script:I18n = Get-Content -LiteralPath $i18nFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-}
-$script:CurrentLang = 'zh'
-
-function T([string]$key, [hashtable]$params = @{}) {
-    $dict = $script:I18n.$($script:CurrentLang)
-    $text = if ($dict -and $dict.$key) { $dict.$key } else { $key }
-    foreach ($k in $params.Keys) {
-        $text = $text.Replace("{$k}", "$($params[$k])")
+function Get-NodeCleanName($node) {
+    if (-not $node) { return "未知节点" }
+    $cnMap = @{
+        'United States'='美国'; 'United Kingdom'='英国'; 'Germany'='德国';
+        'France'='法国'; 'Japan'='日本'; 'Canada'='加拿大'; 'Switzerland'='瑞士';
+        'Spain'='西班牙'; 'Italy'='意大利'; 'Australia'='澳大利亚';
+        'Taiwan'='台湾'; 'Mexico'='墨西哥'; 'Russia'='俄罗斯'; 'Hong Kong'='香港';
+        'China'='中国'; 'Singapore'='新加坡'; 'South Korea'='韩国'
     }
-    return $text
+    $c = if ($node.googleCountry -and $cnMap.ContainsKey($node.googleCountry)) { $cnMap[$node.googleCountry] }
+         elseif ($node.country -and $cnMap.ContainsKey($node.country)) { $cnMap[$node.country] }
+         elseif ($node.country) { $node.country } else { '节点' }
+    $orig = if ($node.orig) { $node.orig } else { '' }
+    $kind = if ($orig -like '*家宽*' -or $orig -like '*住宅*' -or $node.kind -like '*家宽*') { '家宽' }
+            elseif ($orig -like '*高速*') { '高速' }
+            elseif ($orig -like '*IEPL*') { 'IEPL专线' }
+            elseif ($orig -like '*专线*' -or $node.kind -like '*专线*') { '专线' }
+            elseif ($orig -like '*原生*') { '原生' }
+            else { '专线' }
+    $air = if ($node.airport) { $node.airport } elseif ($node.port -ge 22001) { '星辰' } else { '蜂窝' }
+    return "$air-$c-$kind$($node.port)"
 }
 
-# XAML 布局
-[xml]$xaml = @"
+function Format-ProxyEntry($node, $fmt) {
+    $listen = $script:ListenAddr
+    $port = $node.port
+    $httpPort = if ($node.httpPort) { $node.httpPort } else { $port + 10000 }
+    $name = Get-NodeCleanName $node
+    $tag = if ($node.antigravitySupported) { "gemini-pure" } else { "general" }
+    $weight = 1
+    
+    switch ($fmt) {
+        'socks5h://'      { "socks5h://${listen}:${port}" }
+        'socks5://'       { "socks5://${listen}:${port}" }
+        'http://'         { "http://${listen}:${httpPort}" }
+        'IP:端口'         { "${listen}:${port}" }
+        'URI#名称 [标签] (FlowTools推荐)' {
+            "socks5h://${listen}:${port}#$name [$tag]"
+        }
+        'URI#名称|标签|权重' {
+            "socks5h://${listen}:${port}#$name|$tag|$weight"
+        }
+        'CSV (地址,名称,标签,权重)' {
+            "socks5h://${listen}:${port},$name,$tag,$weight"
+        }
+        'JSON 数组 (全字段无损)' {
+            @{
+                url = "socks5h://${listen}:${port}"
+                name = $name
+                tags = @($tag)
+                priority = $weight
+                is_healthy = $true
+                country = $node.country
+                googleCountry = $node.googleCountry
+                port = $port
+            } | ConvertTo-Json -Compress
+        }
+        default {
+            if ($script:Formats[$fmt] -and $script:Formats[$fmt] -ne 'raw') {
+                "$($script:Formats[$fmt])${listen}:${port}"
+            } else {
+                "${listen}:${port}"
+            }
+        }
+    }
+}
+# 这些格式走 HTTP 端口（310xx），其余走 SOCKS 端口（210xx）
+$script:HttpFormats = @('http://')
+
+# ---------------- 界面 ----------------
+[xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Name="MainWin"
-        Title="AgentProxyHub · 智能代理与环境调度中枢" Height="800" Width="1200" MinHeight="560" MinWidth="960"
+        Title="AgentProxyHub · 出口取用 / 巡检风控" Height="780" Width="1240" MinHeight="540" MinWidth="900"
         WindowStartupLocation="CenterScreen" Background="#131316" Foreground="#E9E9EC"
         FontFamily="Microsoft YaHei UI" FontSize="13" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
@@ -181,10 +280,7 @@ function T([string]$key, [hashtable]$params = @{}) {
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsHighlighted" Value="True">
-                <Setter TargetName="ibd" Property="Background" Value="#32323D"/>
-              </Trigger>
-              <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="ibd" Property="Background" Value="#3A3A47"/>
+                <Setter TargetName="ibd" Property="Background" Value="#31313A"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -193,37 +289,113 @@ function T([string]$key, [hashtable]$params = @{}) {
     </Style>
     <Style TargetType="TextBox">
       <Setter Property="Foreground" Value="#E9E9EC"/>
-      <Setter Property="Background" Value="#1C1C22"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="BorderBrush" Value="#2C2C35"/>
-      <Setter Property="Padding" Value="10,5"/>
-      <Setter Property="Height" Value="30"/>
-      <Setter Property="CaretBrush" Value="#E9E9EC"/>
+      <Setter Property="Background" Value="#1E1E23"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="CaretBrush" Value="#7FB2FF"/>
+      <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
+    </Style>
+    <Style TargetType="Expander">
+      <Setter Property="Foreground" Value="#E9E9EC"/>
+      <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+    <Style TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Microsoft YaHei UI"/>
+    </Style>
+    <!-- Dark Minimal ScrollBar -->
+    <Style TargetType="{x:Type ScrollBar}">
+      <Setter Property="Stylus.IsPressAndHoldEnabled" Value="false"/>
+      <Setter Property="Stylus.IsFlicksEnabled" Value="false"/>
+      <Setter Property="Width" Value="7"/>
+      <Setter Property="MinWidth" Value="7"/>
       <Setter Property="Template">
         <Setter.Value>
-          <ControlTemplate TargetType="TextBox">
-            <Border Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="6">
-              <ScrollViewer x:Name="PART_ContentHost" Margin="0" VerticalAlignment="Center"/>
+          <ControlTemplate TargetType="{x:Type ScrollBar}">
+            <Grid x:Name="Bg" SnapsToDevicePixels="true" Background="Transparent">
+              <Track x:Name="PART_Track" IsDirectionReversed="true">
+                <Track.Thumb>
+                  <Thumb x:Name="Thumb">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border x:Name="ThumbBorder" Background="#3A3A44" CornerRadius="3.5" Margin="1,2,1,2"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="true">
+                            <Setter TargetName="ThumbBorder" Property="Background" Value="#555566"/>
+                          </Trigger>
+                          <Trigger Property="IsDragging" Value="true">
+                            <Setter TargetName="ThumbBorder" Property="Background" Value="#707084"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- 巡检风控视图用的深色表格控件 -->
+    <Style TargetType="ListView">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="#E9E9EC"/>
+      <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+    </Style>
+    <Style TargetType="ListViewItem">
+      <Setter Property="Foreground" Value="#E9E9EC"/>
+      <Setter Property="Padding" Value="6,4"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListViewItem">
+            <Border x:Name="gib" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+              <GridViewRowPresenter VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="gib" Property="Background" Value="#22222A"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="gib" Property="Background" Value="#2A3550"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="GridViewColumnHeader">
+      <Setter Property="Background" Value="#232329"/>
+      <Setter Property="Foreground" Value="#A9A9B6"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,6"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="GridViewColumnHeader">
+            <Border Background="{TemplateBinding Background}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
             </Border>
           </ControlTemplate>
         </Setter.Value>
       </Setter>
     </Style>
+    <Style TargetType="ProgressBar">
+      <Setter Property="Height" Value="4"/>
+      <Setter Property="Foreground" Value="#4EA1FF"/>
+      <Setter Property="Background" Value="#22222A"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
   </Window.Resources>
-
   <Grid Margin="14,12,14,12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <!-- 顶部操作条与场景靶场 -->
     <Border Grid.Row="0" Background="#1B1B20" CornerRadius="10" Padding="12,10">
       <Grid>
         <Grid.ColumnDefinitions>
@@ -234,348 +406,1416 @@ function T([string]$key, [hashtable]$params = @{}) {
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
           <Ellipse x:Name="Dot" Width="9" Height="9" Fill="#7A7A85" VerticalAlignment="Center"/>
           <TextBlock x:Name="KernelText" Text="正在检测内核…" Margin="8,0,0,0" VerticalAlignment="Center"/>
-          <Button x:Name="BtnStart" Content="启动内核" Margin="14,0,0,0"/>
+          <Button x:Name="BtnStart" Content="启动内核" Margin="16,0,0,0"/>
           <Button x:Name="BtnStop" Content="停止内核" Margin="6,0,0,0"/>
           <Button x:Name="BtnRefresh" Content="刷新数据" Margin="6,0,0,0"/>
           <Button x:Name="BtnSpeed" Content="重新测速" Margin="6,0,0,0"/>
-
-          <!-- 场景靶场下拉选择器与动态复制 -->
-          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-            <TextBlock x:Name="LblScene" Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="0,0,6,0"/>
-            <ComboBox x:Name="CmbScene" Width="200" VerticalAlignment="Center"/>
-            <Button x:Name="BtnCopyScenePool" Content="⚡ 复制场景池" Margin="8,0,0,0" Background="#223348"/>
-          </StackPanel>
+          <Button x:Name="BtnCopyAiPool" Content="⚡ 复制反重力纯净池" Margin="10,0,0,0" Background="#1B432C"/>
         </StackPanel>
-
-        <!-- 复制格式与多语言自由切换下拉框 -->
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock x:Name="LblFormat" Text="复制格式" Opacity="0.65" VerticalAlignment="Center"/>
-          <ComboBox x:Name="CmbFormat" Width="170" Margin="8,0,0,0"/>
-
-          <!-- 多语言自由切换器 -->
-          <TextBlock Text="🌐" Opacity="0.75" FontSize="14" VerticalAlignment="Center" Margin="12,0,4,0"/>
-          <ComboBox x:Name="CmbLang" Width="105" VerticalAlignment="Center"/>
+          <TextBlock Text="复制格式" Opacity="0.65" VerticalAlignment="Center"/>
+          <ComboBox x:Name="CmbFormat" Width="200" Margin="8,0,0,0"/>
         </StackPanel>
       </Grid>
     </Border>
 
-    <!-- 手机/局域网免软件智能分流卡片 (完整保留) -->
-    <Border Grid.Row="1" Background="#162232" BorderBrush="#254263" BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,8,0,0">
-      <Grid>
+    <!-- 视图切换：一个面板，两个视图 -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="2,10,0,0">
+      <Button x:Name="BtnViewExport" Content="📦 出口取用" Background="#2C3F63"/>
+      <Button x:Name="BtnViewGuard"  Content="🛡 巡检风控" Margin="6,0,0,0"/>
+      <TextBlock x:Name="ViewHint" Margin="14,0,0,0" VerticalAlignment="Center" Opacity="0.55" FontSize="11"
+                 Text="取用出口配置；或对全网 125 个出口做体检、看账号粘性锚定与风控状态"/>
+    </StackPanel>
+
+    <!-- ============ 视图一：出口取用 ============ -->
+    <Grid Grid.Row="2" x:Name="ViewExport" Margin="0,6,0,0">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+
+      <!-- 手机/局域网免软件智能分流卡片 -->
+      <Border Grid.Row="0" Background="#162232" BorderBrush="#254263" BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,2,0,0">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock Text="📱" FontSize="14" VerticalAlignment="Center"/>
+            <TextBlock Text="手机/局域网智能分流总线" FontWeight="SemiBold" Foreground="#7FB2FF" Margin="8,0,0,0" VerticalAlignment="Center"/>
+            <Border Background="#1F3652" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
+              <TextBlock Text="192.168.0.107:39999" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A2D2FF" VerticalAlignment="Center"/>
+            </Border>
+            <TextBlock Text="(HTTP/SOCKS5混合 · 125节点自动选优 · 坏了秒切 · 国内直连)" Opacity="0.75" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+          </StackPanel>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock x:Name="PhoneStatusText" Text="✅ 手机(MI 8 Lite)已就绪" FontSize="11" Foreground="#5FD08A" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <Button x:Name="BtnCopyPhoneProxy" Content="复制代理地址" Background="#203E61" Padding="10,4" Margin="4,0,0,0"/>
+            <Button x:Name="BtnPhoneCmd" Content="挂载命令" Background="#283547" Padding="10,4" Margin="4,0,0,0"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="1" Margin="0,10,0,8">
         <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="📱" FontSize="14" VerticalAlignment="Center"/>
-          <TextBlock x:Name="PhoneBusTitle" Text="手机/局域网智能分流总线" FontWeight="SemiBold" Foreground="#7FB2FF" Margin="8,0,0,0" VerticalAlignment="Center"/>
-          <Border Background="#1F3652" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
-            <TextBlock Text="192.168.0.107:39999" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A2D2FF" VerticalAlignment="Center"/>
-          </Border>
-          <TextBlock x:Name="PhoneBusDesc" Text="(HTTP/SOCKS5混合 · 多节点自动选优 · 坏了秒切 · 国内直连)" Opacity="0.75" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        <StackPanel Grid.Column="0" Orientation="Horizontal">
+          <TextBlock Text="筛选" Opacity="0.65" VerticalAlignment="Center"/>
+          <ComboBox x:Name="CmbFilter" Width="185" Margin="8,0,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock x:Name="PhoneStatusText" Text="✅ 手机(MI 8 Lite)已就绪" FontSize="11" Foreground="#5FD08A" Margin="0,0,10,0" VerticalAlignment="Center"/>
-          <Button x:Name="BtnCopyPhoneProxy" Content="复制代理地址" Background="#203E61" Padding="10,4" Margin="4,0,0,0"/>
-          <Button x:Name="BtnPhoneCmd" Content="挂载命令" Background="#283547" Padding="10,4" Margin="4,0,0,0"/>
+        <TextBlock Grid.Column="1" x:Name="CountText" Margin="16,0,0,0" Opacity="0.75" VerticalAlignment="Center"/>
+        <TextBox Grid.Column="2" x:Name="TxtSearch" Margin="16,0,10,0" VerticalAlignment="Center"/>
+        <StackPanel Grid.Column="3" Orientation="Horizontal">
+          <Button x:Name="BtnExpand" Content="全部展开"/>
+          <Button x:Name="BtnCollapse" Content="全部折叠" Margin="6,0,0,0"/>
         </StackPanel>
       </Grid>
-    </Border>
 
-    <!-- 筛选与搜索栏 -->
-    <Grid Grid.Row="2" Margin="0,10,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-      <StackPanel Grid.Column="0" Orientation="Horizontal">
-        <TextBlock x:Name="LblFilter" Text="视图筛选" Opacity="0.65" VerticalAlignment="Center"/>
-        <ComboBox x:Name="CmbFilter" Width="200" Margin="8,0,0,0"/>
-      </StackPanel>
-      <TextBlock Grid.Column="1" x:Name="CountText" Margin="16,0,0,0" Opacity="0.75" VerticalAlignment="Center"/>
-      <TextBox Grid.Column="2" x:Name="TxtSearch" Margin="16,0,10,0" VerticalAlignment="Center"/>
-      <StackPanel Grid.Column="3" Orientation="Horizontal">
-        <Button x:Name="BtnBatchP1" Content="📋 P1 智能解析格式" Background="#23232A"/>
-        <Button x:Name="BtnBatchSocks" Content="📋 导出全部 SOCKS5" Margin="6,0,0,0" Background="#23232A"/>
-        <Button x:Name="BtnBatchHttp" Content="📋 导出全部 HTTP" Margin="6,0,0,0" Background="#23232A"/>
-      </StackPanel>
+      <Border Grid.Row="2" Background="#18181C" CornerRadius="10" Padding="4">
+        <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="Groups" Margin="6"/>
+        </ScrollViewer>
+      </Border>
+
+      <TextBlock Grid.Row="3" x:Name="StatusText" Margin="4,8,0,0" Opacity="0.6" TextWrapping="Wrap"/>
     </Grid>
 
-    <!-- 节点列表主体 -->
-    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-      <StackPanel x:Name="ListPanel" Margin="0,0,4,0"/>
-    </ScrollViewer>
+    <!-- ============ 视图二：巡检风控 ============ -->
+    <Grid Grid.Row="2" x:Name="ViewGuard" Margin="0,6,0,0" Visibility="Collapsed">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
 
-    <!-- 底部状态栏 -->
-    <Border Grid.Row="4" Background="#16161B" CornerRadius="6" Padding="10,6" Margin="0,8,0,0">
-      <Grid>
+      <UniformGrid Grid.Row="0" Rows="1" Columns="5" Margin="0,2,0,0">
+        <Border Background="#1F1F25" CornerRadius="9" Padding="12,9" Margin="0,0,8,0">
+          <StackPanel>
+            <TextBlock Text="全网端口" Opacity="0.6" FontSize="11"/>
+            <TextBlock x:Name="GSumTotal" Text="—" FontSize="20" FontWeight="SemiBold" Margin="0,3,0,0"/>
+          </StackPanel>
+        </Border>
+        <Border Background="#1B2A22" CornerRadius="9" Padding="12,9" Margin="0,0,8,0">
+          <StackPanel>
+            <TextBlock Text="双通存活" Opacity="0.6" FontSize="11"/>
+            <TextBlock x:Name="GSumAlive" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="#5FD08A" Margin="0,3,0,0"/>
+          </StackPanel>
+        </Border>
+        <Border Background="#2A1D1D" CornerRadius="9" Padding="12,9" Margin="0,0,8,0">
+          <StackPanel>
+            <TextBlock Text="不通端口" Opacity="0.6" FontSize="11"/>
+            <TextBlock x:Name="GSumDead" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="#FF6B6B" Margin="0,3,0,0"/>
+          </StackPanel>
+        </Border>
+        <Border Background="#1F1F25" CornerRadius="9" Padding="12,9" Margin="0,0,8,0">
+          <StackPanel>
+            <TextBlock Text="Gemini 纯净可用" Opacity="0.6" FontSize="11"/>
+            <TextBlock x:Name="GSumPure" Text="—" FontSize="20" FontWeight="SemiBold" Foreground="#7FB2FF" Margin="0,3,0,0"/>
+          </StackPanel>
+        </Border>
+        <Border Background="#1F1F25" CornerRadius="9" Padding="12,9">
+          <StackPanel>
+            <TextBlock Text="账号粘性锚定" Opacity="0.6" FontSize="11"/>
+            <TextBlock x:Name="GSumBind" Text="—" FontSize="20" FontWeight="SemiBold" Margin="0,3,0,0"/>
+          </StackPanel>
+        </Border>
+      </UniformGrid>
+
+      <Border Grid.Row="1" Background="#1F1F25" CornerRadius="10" Padding="12,10" Margin="0,10,0,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="2,0,0,6">
+            <TextBlock Text="🔒 账号粘性锚定" FontWeight="SemiBold" Foreground="#7FB2FF"/>
+            <TextBlock Text="已绑定的出口端口非确凿物理故障绝不切换，杜绝 IP 漂移封号" Opacity="0.6" FontSize="11" Margin="10,1,0,0"/>
+          </StackPanel>
+          <ListView Grid.Row="1" x:Name="LvBind" Height="205" FontSize="12">
+            <ListView.View>
+              <GridView>
+                <GridViewColumn Header="账号" Width="245" DisplayMemberBinding="{Binding Email}"/>
+                <GridViewColumn Header="端口" Width="70"  DisplayMemberBinding="{Binding PortText}"/>
+                <GridViewColumn Header="绑定节点" Width="255" DisplayMemberBinding="{Binding ProxyName}"/>
+                <GridViewColumn Header="状态" Width="185">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+              </GridView>
+            </ListView.View>
+          </ListView>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="2" Margin="0,10,0,8">
         <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
-        <TextBlock x:Name="StatusText" Text="准备就绪" Opacity="0.75" VerticalAlignment="Center"/>
-        <TextBlock Grid.Column="1" Text="AgentProxyHub v1.0.0 · Dual-Track SOCKS/HTTP Engine" Opacity="0.45" FontSize="11" VerticalAlignment="Center"/>
+        <Button Grid.Column="0" x:Name="BtnGuardScan" Content="🔍 开始全网巡检" Background="#23375C"/>
+        <Button Grid.Column="1" x:Name="BtnGuardFill" Content="⚡ 充盈备选池" Margin="6,0,0,0" Background="#3A2A17"/>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="16,0,0,0">
+          <TextBlock Text="筛选" Opacity="0.65" VerticalAlignment="Center"/>
+          <ComboBox x:Name="CmbGuardFilter" Width="190" Margin="8,0,0,0" SelectedIndex="0">
+            <ComboBoxItem Content="全部端口"/>
+            <ComboBoxItem Content="仅存活"/>
+            <ComboBoxItem Content="仅不通"/>
+            <ComboBoxItem Content="仅 Gemini 纯净可用"/>
+            <ComboBoxItem Content="仅账号绑定"/>
+            <ComboBoxItem Content="仅备选池"/>
+          </ComboBox>
+        </StackPanel>
+        <TextBox Grid.Column="3" x:Name="TxtGuardSearch" Margin="16,0,10,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="4" x:Name="GuardCountText" VerticalAlignment="Center" Opacity="0.75"/>
       </Grid>
-    </Border>
+
+      <Border Grid.Row="3" Background="#18181C" CornerRadius="10" Padding="6">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <ListView Grid.Row="0" x:Name="LvGuard" FontSize="12">
+            <ListView.View>
+              <GridView>
+                <GridViewColumn Header="端口" Width="62" DisplayMemberBinding="{Binding Port}"/>
+                <GridViewColumn Header="品牌" Width="58">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Brand}" Foreground="{Binding BrandBrush}" FontWeight="SemiBold"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="节点名称" Width="250" DisplayMemberBinding="{Binding Name}"/>
+                <GridViewColumn Header="落地地区" Width="150" DisplayMemberBinding="{Binding Country}"/>
+                <GridViewColumn Header="风控" Width="115">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Risk}" Foreground="{Binding RiskBrush}"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="状态" Width="175">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="出口 IP" Width="140" DisplayMemberBinding="{Binding ExitIp}"/>
+              </GridView>
+            </ListView.View>
+          </ListView>
+          <ProgressBar Grid.Row="1" x:Name="GuardBar" Margin="4,8,4,2" Minimum="0" Maximum="125" Value="0"/>
+        </Grid>
+      </Border>
+
+      <TextBlock Grid.Row="4" x:Name="GuardStatusText" Margin="4,8,0,0" Opacity="0.7" TextWrapping="Wrap"/>
+    </Grid>
   </Grid>
 </Window>
-"@
+'@
 
-# 加载窗口
-$reader = New-Object System.Xml.XmlNodeReader $xaml
-$win = [Windows.Markup.XamlReader]::Load($reader)
+$win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 
-# 注册控件
-$MainWin           = $win.FindName('MainWin')
-$Dot               = $win.FindName('Dot')
-$KernelText        = $win.FindName('KernelText')
-$BtnStart          = $win.FindName('BtnStart')
-$BtnStop           = $win.FindName('BtnStop')
-$BtnRefresh        = $win.FindName('BtnRefresh')
-$BtnSpeed          = $win.FindName('BtnSpeed')
-$LblScene          = $win.FindName('LblScene')
-$CmbScene          = $win.FindName('CmbScene')
-$BtnCopyScenePool  = $win.FindName('BtnCopyScenePool')
-$LblFormat         = $win.FindName('LblFormat')
-$CmbFormat         = $win.FindName('CmbFormat')
-$CmbLang           = $win.FindName('CmbLang')
-$PhoneBusTitle     = $win.FindName('PhoneBusTitle')
-$PhoneBusDesc      = $win.FindName('PhoneBusDesc')
-$PhoneStatusText   = $win.FindName('PhoneStatusText')
+# 应用图标：窗口（标题栏/任务栏）与托盘共用 assets\app.ico
+$script:IconPath = Join-Path $Dir 'assets\app.ico'
+if (Test-Path -LiteralPath $script:IconPath) {
+    try {
+        $fs = [System.IO.File]::OpenRead($script:IconPath)
+        try {
+            $dec = [Windows.Media.Imaging.BitmapDecoder]::Create(
+                $fs,
+                [Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat,
+                [Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+            $frame = @($dec.Frames) | Sort-Object -Property PixelWidth -Descending | Select-Object -First 1
+            if ($frame) { $win.Icon = $frame }
+        } finally { $fs.Dispose() }
+    } catch { Write-PanelEvent 'icon-failed' $_.Exception.Message }
+}
+
+$applyDarkTitle = {
+    try {
+        $helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
+        if ($helper.Handle -ne [IntPtr]::Zero) {
+            [Win11Dwm]::EnableDarkMode($helper.Handle, 0x00161313, 0x00ECE9E9)
+        }
+    } catch { }
+}
+$win.Add_SourceInitialized($applyDarkTitle)
+$win.Add_Loaded($applyDarkTitle)
+$win.Add_Activated($applyDarkTitle)
+
+$Dot         = $win.FindName('Dot')
+$KernelText  = $win.FindName('KernelText')
+$StatusText  = $win.FindName('StatusText')
+$CountText   = $win.FindName('CountText')
+$Groups      = $win.FindName('Groups')
+$Scroll      = $win.FindName('Scroll')
+$BtnStart    = $win.FindName('BtnStart')
+$BtnStop     = $win.FindName('BtnStop')
+$BtnRefresh  = $win.FindName('BtnRefresh')
+$BtnSpeed    = $win.FindName('BtnSpeed')
+$BtnExpand   = $win.FindName('BtnExpand')
+$BtnCollapse = $win.FindName('BtnCollapse')
+$CmbFormat   = $win.FindName('CmbFormat')
+$CmbFilter   = $win.FindName('CmbFilter')
+$TxtSearch   = $win.FindName('TxtSearch')
 $BtnCopyPhoneProxy = $win.FindName('BtnCopyPhoneProxy')
 $BtnPhoneCmd       = $win.FindName('BtnPhoneCmd')
-$LblFilter         = $win.FindName('LblFilter')
-$CmbFilter         = $win.FindName('CmbFilter')
-$CountText         = $win.FindName('CountText')
-$TxtSearch         = $win.FindName('TxtSearch')
-$ListPanel         = $win.FindName('ListPanel')
-$StatusText        = $win.FindName('StatusText')
-$BtnBatchP1        = $win.FindName('BtnBatchP1')
-$BtnBatchSocks     = $win.FindName('BtnBatchSocks')
-$BtnBatchHttp      = $win.FindName('BtnBatchHttp')
+$PhoneStatusText   = $win.FindName('PhoneStatusText')
 
-# 格式列表填充
-foreach ($k in $script:Formats.Keys) { [void]$CmbFormat.Items.Add($k) }
-$CmbFormat.SelectedIndex = 0
-
-# 语言下拉框填充
-$langMap = [ordered]@{
-    '简体中文' = 'zh'
-    'English'  = 'en'
-    '日本語'   = 'ja'
-    '한국어'   = 'ko'
-}
-foreach ($l in $langMap.Keys) { [void]$CmbLang.Items.Add($l) }
-$CmbLang.SelectedIndex = 0
-
-# 加载 scenes.json 规则
-$script:Scenes = @()
-$scenesFile = Join-Path $RootDir 'config\scenes.json'
-if (Test-Path -LiteralPath $scenesFile) {
-    try { $script:Scenes = Get-Content -LiteralPath $scenesFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
-}
-if ($script:Scenes.Count -eq 0) {
-    $script:Scenes = @(
-        [pscustomobject]@{ id='antigravity'; name='✨ 反重力 / Gemini (Google原生)'; chip='Gemini ✅'; chipBg='#1B432C'; chipFg='#5FD08A'; matchKey='antigravitySupported' },
-        [pscustomobject]@{ id='claude'; name='🟣 Claude 专属 (Anthropic直连)'; chip='Claude ✅'; chipBg='#3B1E4A'; chipFg='#C77DFF'; matchKey='claudeSupported' },
-        [pscustomobject]@{ id='openai'; name='🟢 ChatGPT / OpenAI (API高速)'; chip='OpenAI ✅'; chipBg='#1A3A2A'; chipFg='#4EBA6F'; matchKey='openaiSupported' },
-        [pscustomobject]@{ id='facebook'; name='🔵 Facebook / 海外社媒 (住宅纯净)'; chip='FB住宅 ✅'; chipBg='#1E2E4A'; chipFg='#70A1FF'; matchKey='facebookSupported' }
-    )
-}
-foreach ($s in $script:Scenes) { [void]$CmbScene.Items.Add($s.name) }
-if ($CmbScene.Items.Count -gt 0) { $CmbScene.SelectedIndex = 0 }
-
-# 核心多语言切换函数
-function Apply-Language([string]$lang) {
-    $script:CurrentLang = $lang
-    $win.Title = T 'title'
-    $BtnStart.Content = T 'btn_start'
-    $BtnStop.Content = T 'btn_stop'
-    $BtnRefresh.Content = T 'btn_refresh'
-    $BtnSpeed.Content = T 'btn_speed'
-    $LblScene.Text = T 'lbl_scene'
-    $LblFormat.Text = T 'lbl_format'
-    $PhoneBusTitle.Text = T 'phone_bus_title'
-    $PhoneBusDesc.Text = T 'phone_bus_desc'
-    $PhoneStatusText.Text = T 'phone_status_ready'
-    $BtnCopyPhoneProxy.Content = T 'btn_copy_phone_proxy'
-    $BtnPhoneCmd.Content = T 'btn_phone_cmd'
-    $LblFilter.Text = T 'lbl_filter'
-    $TxtSearch.Text = T 'search_placeholder'
-    $BtnBatchP1.Content = T 'btn_export_p1'
-    $BtnBatchSocks.Content = T 'btn_export_socks'
-    $BtnBatchHttp.Content = T 'btn_export_http'
-    $StatusText.Text = T 'status_ready'
-
-    # 动态刷新筛选列表
-    $oldIdx = $CmbFilter.SelectedIndex
-    if ($oldIdx -lt 0) { $oldIdx = 0 }
-    $CmbFilter.Items.Clear()
-    [void]$CmbFilter.Items.Add((T 'filter_scene'))
-    [void]$CmbFilter.Items.Add((T 'filter_s'))
-    [void]$CmbFilter.Items.Add((T 'filter_a'))
-    [void]$CmbFilter.Items.Add((T 'filter_all'))
-    [void]$CmbFilter.Items.Add((T 'filter_sent'))
-    $CmbFilter.SelectedIndex = $oldIdx
-
-    Update-SceneButton
-}
-
-$CmbLang.Add_SelectionChanged({
-    $selectedName = $CmbLang.SelectedItem
-    if ($selectedName -and $langMap.Contains($selectedName)) {
-        Apply-Language $langMap[$selectedName]
-    }
-})
-
-# 托盘图标设置
-$script:Tray = New-Object Windows.Forms.NotifyIcon
-$script:Tray.Text = 'AgentProxyHub'
-$icoFile = Join-Path $RootDir 'assets\app.ico'
-if (Test-Path -LiteralPath $icoFile) {
-    $script:Tray.Icon = New-Object Drawing.Icon $icoFile
+# 点窗口关闭只隐藏面板；托盘菜单的「退出面板」才真正结束进程，内核独立运行。
+$script:ExitRequested = $false
+$script:Tray = New-Object System.Windows.Forms.NotifyIcon
+$script:Tray.Icon = if ($script:IconPath -and (Test-Path -LiteralPath $script:IconPath)) {
+    New-Object System.Drawing.Icon($script:IconPath)
 } else {
-    $script:Tray.Icon = [Drawing.SystemIcons]::Application
+    [System.Drawing.SystemIcons]::Application
 }
-$script:Tray.Visible = $true
-
+$script:Tray.Text = 'AgentProxyHub（出口取用 / 巡检风控）'
+$trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$openItem = $trayMenu.Items.Add('打开面板')
+$exitItem = $trayMenu.Items.Add('退出面板（内核继续运行）')
+$script:Tray.ContextMenuStrip = $trayMenu
 $openPanel = {
+    $win.ShowInTaskbar = $true
     $win.Show()
-    if ($win.WindowState -eq [Windows.WindowState]::Minimized) { $win.WindowState = [Windows.WindowState]::Normal }
-    $win.Activate()
+    $win.WindowState = [Windows.WindowState]::Normal
+    $win.Activate() | Out-Null
+    Write-PanelEvent 'shown'
 }
-$script:Tray.Add_DoubleClick({ & $openPanel })
-
-$trayMenu = New-Object Windows.Forms.ContextMenuStrip
-$mOpen = $trayMenu.Items.Add('打开面板')
-$mOpen.Add_Click({ & $openPanel })
-$mSep = $trayMenu.Items.Add('-')
-$mExit = $trayMenu.Items.Add('退出 AgentProxyHub')
-$mExit.Add_Click({
-    $script:Tray.Visible = $false
-    $script:Tray.Dispose()
+$openItem.Add_Click($openPanel)
+$script:Tray.Add_MouseClick({
+    param($sender, $e)
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { & $openPanel }
+})
+$script:Tray.Add_DoubleClick($openPanel)
+$exitItem.Add_Click({
+    $script:ExitRequested = $true
+    Write-PanelEvent 'exit-menu'
     $win.Close()
 })
-$script:Tray.ContextMenuStrip = $trayMenu
-
 $win.Add_Closing({
     param($sender, $e)
-    $e.Cancel = $true
-    $win.Hide()
-    $script:Tray.ShowBalloonTip(1500, 'AgentProxyHub', '面板已最小化至系统托盘，双击托盘图标即可唤出。', [Windows.Forms.ToolTipIcon]::Info)
-})
-
-# DWM 深色标题栏启用
-$win.Add_SourceInitialized({
-    $hwnd = (New-Object Windows.Interop.WindowInteropHelper $win).Handle
-    [Win11Dwm]::EnableDarkMode($hwnd)
-})
-
-function Update-SceneButton {
-    $idx = $CmbScene.SelectedIndex
-    if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
-    $s = $script:Scenes[$idx]
-    $matchedCount = 0
-    if ($script:Nodes) {
-        $key = if ($s.matchKey) { $s.matchKey } else { "$($s.id)Supported" }
-        $matchedCount = @($script:Nodes | Where-Object { $_.$key -eq $true }).Count
+    if (-not $script:ExitRequested) {
+        $e.Cancel = $true
+        $win.Hide()
+        $win.ShowInTaskbar = $false
+        Write-PanelEvent 'hidden-to-tray'
     }
-    $BtnCopyScenePool.Content = "$([char]0x26A1) $(T 'btn_copy_scene') ($matchedCount)"
-    if ($s.chipBg) {
-        try { $BtnCopyScenePool.Background = (New-Object Windows.Media.BrushConverter).ConvertFromString($s.chipBg) } catch { }
+})
+$script:Tray.Visible = $true
+$script:ShowTimer = New-Object Windows.Threading.DispatcherTimer
+$script:ShowTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+$script:ShowTimer.Add_Tick({
+    if ($script:ShowSignal.WaitOne(0)) { & $openPanel }
+    if ($script:GuardSignal.WaitOne(0)) {
+        & $openPanel
+        Switch-View 'Guard'
     }
-}
-$CmbScene.Add_SelectionChanged({ Update-SceneButton })
+})
+$script:ShowTimer.Start()
 
-# 节点数据逻辑
+foreach ($k in $script:Formats.Keys) { [void]$CmbFormat.Items.Add($k) }
+$CmbFormat.SelectedIndex = 0
+$filters = @(
+    '✨ 反重力 & Flow 优质推荐 (S+A+B)',
+    '👑 仅看 S 级纯净推荐',
+    '🌟 仅看 A 级优质原生',
+    '🐝 仅看蜂窝优质',
+    '⭐ 仅看星辰优质',
+    '全部出口 (含冷门与隔离区)',
+    '⚠️ Google 已送中 (避坑)'
+)
+foreach ($f in $filters) { [void]$CmbFilter.Items.Add($f) }
+$CmbFilter.SelectedIndex = 0
+$TxtSearch.Text = '搜索地区 / 城市 / 端口 / IP'
+
+# ---------------- 数据与工具 ----------------
 $script:Nodes = @()
-$script:ListenAddr = "127.0.0.1"
+$script:Lat = @{}
+$script:Secret = ''
+$script:ProfilePath = ''
+$script:LastWrite = $null
+$script:ExpandedInit = $false
 
-function Load-NodesData {
-    $dataFile = Join-Path $RootDir 'data\nodes.json'
-    if (-not (Test-Path -LiteralPath $dataFile)) {
-        $sysData = "D:\Program Files\FengWoBridge\nodes.json"
-        if (Test-Path -LiteralPath $sysData) { $dataFile = $sysData }
+function Pump {
+    [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
+        [action]{}, [Windows.Threading.DispatcherPriority]::Background)
+}
+
+function Get-BridgeInfo {
+    $f = Get-RunFile 'bridge.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    try { return (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-Secret {
+    $b = Get-BridgeInfo
+    if ($b -and $b.secret) { return $b.secret }
+    return ''
+}
+
+function Get-ProfileInfo {
+    $b = Get-BridgeInfo
+    if (-not $b -or -not $b.profilePath) { return $null }
+    $p = $b.profilePath
+    if (-not (Test-Path -LiteralPath $p)) { return @{ Path = $p; Write = $null } }
+    return @{ Path = $p; Write = (Get-Item -LiteralPath $p).LastWriteTime }
+}
+
+function Test-Kernel {
+    return [bool](Get-Process mihomo -ErrorAction SilentlyContinue)
+}
+
+function Invoke-Script([string]$file, [string[]]$extra = @()) {
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Get-CoreFile $file)) + $extra
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = 'powershell.exe'
+    $psi.Arguments = ($argList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEnd()
+    $err = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    return @{ Code = $p.ExitCode; Out = $out; Err = $err }
+}
+
+function Load-Nodes {
+    $f = Get-RunFile 'nodes.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $false }
+    $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+    $script:Nodes = @($j.nodes)
+    $script:DataStamp = $j.generatedAt
+    $script:AliveTotal = $j.alive
+    return $true
+}
+
+# 并发测速：80 个请求同时发出（串行要几分钟）
+function Measure-Latency {
+    $script:Lat = @{}
+    if (-not (Test-Kernel)) { return 0 }
+    $secret = Get-Secret
+    if (-not $secret) { return 0 }
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(12)
+    $client.DefaultRequestHeaders.Add('Authorization', "Bearer $secret")
+    $names = New-Object 'System.Collections.Generic.List[string]'
+    $tasks = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($n in $script:Nodes) {
+        $names.Add($n.name)
+        $u = "http://127.0.0.1:21909/proxies/$($n.name)/delay?timeout=3000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
+        try { $tasks.Add($client.GetStringAsync($u)) } catch { $tasks.Add($null) }
     }
-    if (Test-Path -LiteralPath $dataFile) {
+    try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]($tasks | Where-Object { $_ }), 25000) | Out-Null } catch { }
+    $ok = 0
+    for ($i = 0; $i -lt $tasks.Count; $i++) {
+        $t = $tasks[$i]
+        if ($t -and $t.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+            try {
+                $d = ($t.Result | ConvertFrom-Json).delay
+                if ($d -gt 0) { $script:Lat[$names[$i]] = [int]$d; $ok++ }
+            } catch { }
+        }
+    }
+    $client.Dispose()
+    return $ok
+}
+
+function Get-Tags($n) {
+    $t = New-Object 'System.Collections.Generic.List[string]'
+    if ($n.orig -match '解锁') { $t.Add('解锁') }
+    if ($n.orig -match '原生') { $t.Add('原生') }
+    if ($n.orig -match '专线') { $t.Add('专线') }
+    if ($n.orig -match '动态') { $t.Add('动态') }
+    if ($n.orig -match '家宽') { $t.Add('家宽') }
+    if ($n.orig -match 'CF优选') { $t.Add('CF优选') }
+    if ($n.kind) { $t.Add($n.kind) }
+    return $t
+}
+
+function Test-Premium($n) {
+    $ms = $script:Lat[$n.name]
+    if (-not $ms) { return $false }
+    if ($ms -gt 300) { return $false }
+    if ($n.kind -ne '机房' -and $n.orig -notmatch '专线') { return $false }
+    return $true
+}
+
+function Test-Unlocked($n) { return ($n.orig -match '解锁') }
+function Test-Native($n) { return ($n.orig -match '原生') }
+function Test-Dedicated($n) { return ($n.orig -match '专线') }
+function Test-Alive($n) { return [bool]($n.ip -and $script:Lat[$n.name]) }
+
+function Get-Filtered {
+    $sel = $CmbFilter.SelectedItem
+    $kw = $TxtSearch.Text.Trim()
+    if ($kw -eq '搜索地区 / 城市 / 端口 / IP') { $kw = '' }
+    $out = foreach ($n in $script:Nodes) {
+        $pass = switch ($sel) {
+            '✨ 反重力 & Flow 优质推荐 (S+A+B)' { [bool]($n.antigravitySupported) }
+            '👑 仅看 S 级纯净推荐'               { $n.healthRating -eq 'S' }
+            '🌟 仅看 A 级优质原生'               { $n.healthRating -eq 'A' }
+            '🐝 仅看蜂窝优质'                   { ($n.airport -eq '蜂窝') -and [bool]($n.antigravitySupported) }
+            '⭐ 仅看星辰优质'                   { ($n.airport -eq '星辰') -and [bool]($n.antigravitySupported) }
+            '⚠️ Google 已送中 (避坑)'           { [bool]($n.isSentToChina) }
+            '全部出口 (含冷门与隔离区)'          { $true }
+            default                             { [bool]($n.antigravitySupported) }
+        }
+        if (-not $pass) { continue }
+        if ($kw) {
+            $cn = $null
+            if ($n.countryCode) { $cn = $script:RegionCn[$n.countryCode] }
+            $hay = "$($n.port) $($n.airport) $($n.countryCode) $cn $($n.country) $($n.city) $($n.ip) $($n.orig) $($n.googleCountry) $($n.aiStatus)"
+            if ($hay -notmatch [regex]::Escape($kw)) { continue }
+        }
+        $n
+    }
+    return @($out)
+}
+
+# ---------------- 行与分组渲染 ----------------
+function New-Chip([string]$text, [string]$bg, [string]$fg = '#E9E9EC') {
+    $b = New-Object Windows.Controls.Border
+    $b.Background = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($bg))
+    $b.CornerRadius = [Windows.CornerRadius]::new(3)
+    $b.Padding = [Windows.Thickness]::new(6, 1, 6, 1)
+    $b.Margin = [Windows.Thickness]::new(0, 0, 5, 0)
+    $t = New-Object Windows.Controls.TextBlock
+    $t.Text = $text
+    $t.FontSize = 11
+    $t.Foreground = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($fg))
+    $b.Child = $t
+    return $b
+}
+
+function New-Row($n) {
+    $border = New-Object Windows.Controls.Border
+    $border.Background = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1F1F25'))
+    $border.CornerRadius = [Windows.CornerRadius]::new(6)
+    $border.Padding = [Windows.Thickness]::new(10, 6, 10, 6)
+    $border.Margin = [Windows.Thickness]::new(18, 0, 0, 4)
+
+    $g = New-Object Windows.Controls.Grid
+    foreach ($w in @(106, 150, 130, 74, 0, 74)) {
+        $c = New-Object Windows.Controls.ColumnDefinition
+        if ($w -gt 0) { $c.Width = [Windows.GridLength]::new($w) } else { $c.Width = [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) }
+        $g.ColumnDefinitions.Add($c)
+    }
+
+    $pcol = New-Object Windows.Controls.StackPanel
+    $pcol.Orientation = 'Vertical'
+    $p = New-Object Windows.Controls.TextBlock
+    $p.Text = "$($n.port)"
+    $p.Foreground = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#7FB2FF'))
+    $p.FontFamily = 'Consolas'
+    $p.FontWeight = [Windows.FontWeights]::SemiBold
+    $pcol.Children.Add($p) | Out-Null
+
+    # 机场来源徽章
+    $air = if ($n.airport) { $n.airport } elseif ($n.port -ge 22001) { '星辰' } else { '蜂窝' }
+    $airBg = if ($air -eq '星辰') { '#2D2250' } else { '#4A2E18' }
+    $airFg = if ($air -eq '星辰') { '#B692FE' } else { '#FFA756' }
+    $airChip = New-Chip "[$air]" $airBg $airFg
+    $airChip.Margin = [Windows.Thickness]::new(0, 2, 0, 0)
+    $pcol.Children.Add($airChip) | Out-Null
+
+    # 健康度评分徽章
+    $sc = if ($n.healthScore) { [int]$n.healthScore } else { 0 }
+    $rt = if ($n.healthRating) { $n.healthRating } else { 'F' }
+    $scBg = if ($sc -ge 90) { '#1B432C' } elseif ($sc -ge 80) { '#183B38' } elseif ($sc -gt 0) { '#423318' } else { '#451717' }
+    $scFg = if ($sc -ge 90) { '#5FD08A' } elseif ($sc -ge 80) { '#48CAE4' } elseif ($sc -gt 0) { '#E8C46A' } else { '#FF8B8B' }
+    $scText = "$sc分·$rt"
+    if ($n.isSentToChina) { $scText = "0分·送中" }
+    elseif (-not $n.ip) { $scText = "0分·离线" }
+    $chipBorder = New-Chip $scText $scBg $scFg
+    $chipBorder.Margin = [Windows.Thickness]::new(0, 2, 0, 0)
+    $pcol.Children.Add($chipBorder) | Out-Null
+
+    if ($n.httpPort) {
+        $ph = New-Object Windows.Controls.TextBlock
+        $ph.Text = "http $($n.httpPort)"
+        $ph.FontSize = 10
+        $ph.Opacity = 0.55
+        $ph.FontFamily = 'Consolas'
+        $pcol.Children.Add($ph) | Out-Null
+    }
+    $pcol.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($pcol, 0)
+    $g.Children.Add($pcol) | Out-Null
+
+    $loc = New-Object Windows.Controls.StackPanel
+    $loc.Orientation = 'Vertical'
+    $l1 = New-Object Windows.Controls.TextBlock
+    $cCode = $n.countryCode
+    $cCn = if ($cCode -and $script:RegionCn.ContainsKey($cCode)) { $script:RegionCn[$cCode] } else { $n.country }
+    if (-not $cCn -and $n.googleCountry) { $cCn = $n.googleCountry }
+    if (-not $cCn) { $cCn = $n.orig -replace '-(专线|原生|vip|解锁|家宽|动态).*', '' }
+    $locText = if ($cCn -and $n.city) { "$cCn · $($n.city)" }
+               elseif ($cCn) { "$cCn" }
+               elseif ($n.ip) { "物理地区解析中" }
+               else { "节点离线" }
+    $l1.Text = $locText
+    $l1.TextTrimming = 'CharacterEllipsis'
+    $loc.Children.Add($l1) | Out-Null
+
+    # Google 判定地区显示
+    if ($n.googleCountry) {
+        $lGoogle = New-Object Windows.Controls.TextBlock
+        $gColor = if ($n.antigravitySupported) { '#5FD08A' } elseif ($n.isSentToChina) { '#FF7B7B' } else { '#B0B0BA' }
+        $gText = "Google: $($n.googleCountry)"
+        if ($n.isSentToChina) { $gText += " (送中)" }
+        $lGoogle.Text = $gText
+        $lGoogle.FontSize = 11
+        $lGoogle.Foreground = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($gColor))
+        $lGoogle.TextTrimming = 'CharacterEllipsis'
+        $loc.Children.Add($lGoogle) | Out-Null
+    }
+
+    $l2 = New-Object Windows.Controls.TextBlock
+    $l2.Text = if ($n.isp) { $n.isp } else { '—' }
+    $l2.FontSize = 10
+    $l2.Opacity = 0.55
+    $l2.TextTrimming = 'CharacterEllipsis'
+    $loc.Children.Add($l2) | Out-Null
+
+    $loc.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($loc, 1)
+    $g.Children.Add($loc) | Out-Null
+
+    $ip = New-Object Windows.Controls.TextBlock
+    $ip.Text = if ($n.ip) { $n.ip } else { '未探测' }
+    $ip.FontFamily = 'Consolas'
+    $ip.FontSize = 12
+    $ip.VerticalAlignment = 'Center'
+    if (-not $n.ip) { $ip.Opacity = 0.45 }
+    [Windows.Controls.Grid]::SetColumn($ip, 2)
+    $g.Children.Add($ip) | Out-Null
+
+    $ms = $script:Lat[$n.name]
+    $lat = New-Object Windows.Controls.TextBlock
+    if ($ms) {
+        $lat.Text = "$ms ms"
+        $col = if ($ms -le 150) { '#5FD08A' } elseif ($ms -le 300) { '#E8C46A' } else { '#E08A8A' }
+        $lat.Foreground = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($col))
+    } else {
+        $lat.Text = '—'
+        $lat.Opacity = 0.45
+    }
+    $lat.VerticalAlignment = 'Center'
+    $lat.FontSize = 12
+    [Windows.Controls.Grid]::SetColumn($lat, 3)
+    $g.Children.Add($lat) | Out-Null
+
+    $chips = New-Object Windows.Controls.WrapPanel
+    $chips.VerticalAlignment = 'Center'
+
+    # AI 支持徽章优先展示
+    if ($n.antigravitySupported) {
+        $chips.Children.Add((New-Chip '反重力/Gemini ✅' '#1B432C' '#5FD08A')) | Out-Null
+        if ($n.flowSupported) {
+            $chips.Children.Add((New-Chip 'Flow ✅' '#182C4A' '#7AB4FF')) | Out-Null
+        }
+    } elseif ($n.isSentToChina) {
+        $chips.Children.Add((New-Chip 'Google送中 ❌' '#451717' '#FF8B8B')) | Out-Null
+    } elseif ($n.googleCountry -eq 'China' -or $n.googleCountry -eq 'Hong Kong') {
+        $chips.Children.Add((New-Chip '地区不支持 ❌' '#3A2020' '#E09A9A')) | Out-Null
+    }
+
+    foreach ($tag in (Get-Tags $n)) {
+        $bg = switch ($tag) {
+            '解锁'   { '#2E4A33' }
+            '原生'   { '#2B3F52' }
+            '专线'   { '#3A3350' }
+            '动态'   { '#4A3A2A' }
+            '家宽'   { '#33383F' }
+            '机房'   { '#2B3A44' }
+            default  { '#33333A' }
+        }
+        $chips.Children.Add((New-Chip $tag $bg)) | Out-Null
+    }
+    [Windows.Controls.Grid]::SetColumn($chips, 4)
+    $g.Children.Add($chips) | Out-Null
+
+    $btn = New-Object Windows.Controls.Button
+    $btn.Content = '复制'
+    $btn.Tag = @{ node = $n; socks = $n.port; http = $n.httpPort }
+    $btn.FontSize = 12
+    $btn.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($btn, 5)
+    $btn.Add_Click({
+        $node = $this.Tag.node
+        $fmt = $CmbFormat.SelectedItem
+        $text = Format-ProxyEntry $node $fmt
+        try { [Windows.Clipboard]::SetText($text) } catch { }
+        $this.Content = '已复制'
+        $resetTimer = New-Object Windows.Threading.DispatcherTimer
+        $resetTimer.Interval = [TimeSpan]::FromMilliseconds(900)
+        $resetTimer.Tag = $this
+        $resetTimer.Add_Tick({
+            param($sender, $eventArgs)
+            $sender.Tag.Content = '复制'
+            $sender.Stop()
+        })
+        $script:StatusText.Text = "已复制到剪贴板：$text"
+        $resetTimer.Start()
+    })
+    $g.Children.Add($btn) | Out-Null
+
+    $border.Child = $g
+    return $border
+}
+
+function Render {
+    $list = Get-Filtered
+    $Groups.Children.Clear()
+
+    # 按评级分组定义（S 级、A 级默认展开，其他折叠）
+    $groupDefs = @(
+        @{
+            Key = 'S'
+            Title = '👑 S 级 · 极速/专线纯净推荐 (反重力 & Flow 完美支持)'
+            Color = '#5FD08A'
+            Bg = '#1B432C'
+            DefaultExpand = $true
+            Match = { param($n) $n.healthRating -eq 'S' }
+        },
+        @{
+            Key = 'A'
+            Title = '🌟 A 级 · 优质原生支持 (反重力 & Flow 官方支持区)'
+            Color = '#48CAE4'
+            Bg = '#183B38'
+            DefaultExpand = $true
+            Match = { param($n) $n.healthRating -eq 'A' }
+        },
+        @{
+            Key = 'B'
+            Title = '⚡ B 级 · 良好可用支持 (家宽/动态 支持区)'
+            Color = '#E8C46A'
+            Bg = '#423318'
+            DefaultExpand = $false
+            Match = { param($n) $n.healthRating -eq 'B' }
+        },
+        @{
+            Key = 'Other'
+            Title = '🌐 C / D 级 · 其他地区与冷门节点'
+            Color = '#B0B0BA'
+            Bg = '#2B2B33'
+            DefaultExpand = $false
+            Match = { param($n) ($n.healthRating -in @('C', 'D')) -and (-not $n.isSentToChina) }
+        },
+        @{
+            Key = 'Sent'
+            Title = '⛔ F 级 · 送中与不支持隔离区 (严禁用于反重力/Flow)'
+            Color = '#FF8B8B'
+            Bg = '#451717'
+            DefaultExpand = $false
+            Match = { param($n) $n.isSentToChina -or ($n.healthRating -in @('E', 'F')) }
+        }
+    )
+
+    $kw0 = $TxtSearch.Text.Trim()
+    $isSearching = ($kw0 -ne '') -and ($kw0 -ne '搜索地区 / 城市 / 端口 / IP')
+
+    foreach ($gdef in $groupDefs) {
+        $items = @($list | Where-Object { & $gdef.Match $_ } |
+            Sort-Object { if ($script:Lat[$_.name]) { $script:Lat[$_.name] } else { 9999 } }, { $_.port })
+        if ($items.Count -eq 0) { continue }
+
+        $exp = New-Object Windows.Controls.Expander
+        # 默认展开 S 级与 A 级；搜索时全展开
+        $exp.IsExpanded = $isSearching -or $gdef.DefaultExpand
+
+        $head = New-Object Windows.Controls.StackPanel
+        $head.Orientation = 'Horizontal'
+        
+        $h1 = New-Object Windows.Controls.TextBlock
+        $h1.Text = $gdef.Title
+        $h1.FontWeight = 'SemiBold'
+        $h1.Foreground = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($gdef.Color))
+        $head.Children.Add($h1) | Out-Null
+
+        $fwCount = @($items | Where-Object { ($_.airport -eq '蜂窝') -or ($_.port -lt 22001) }).Count
+        $xcCount = @($items | Where-Object { ($_.airport -eq '星辰') -or ($_.port -ge 22001) }).Count
+        
+        $h2 = New-Object Windows.Controls.TextBlock
+        $h2.Text = "    $($items.Count) 个出口  (蜂窝 $fwCount · 星辰 $xcCount)"
+        $h2.Opacity = 0.7
+        $h2.FontSize = 12
+        $h2.VerticalAlignment = 'Center'
+        $head.Children.Add($h2) | Out-Null
+        
+        $exp.Header = $head
+
+        $inner = New-Object Windows.Controls.StackPanel
+        $inner.Margin = [Windows.Thickness]::new(0, 4, 0, 8)
+        foreach ($n in $items) { $inner.Children.Add((New-Row $n)) | Out-Null }
+        $exp.Content = $inner
+        $Groups.Children.Add($exp) | Out-Null
+    }
+
+    $stat = "聚合出口 $($script:Nodes.Count) 个 (蜂窝 + 星辰)　当前显示 $($list.Count) 个"
+    if ($script:Lat.Count -gt 0) { $stat += "　已测速 $($script:Lat.Count) 个" }
+    $CountText.Text = $stat
+}
+
+function Update-KernelUi {
+    $run = Test-Kernel
+    if ($run) {
+        $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#5FD08A'))
+        $KernelText.Text = '内核运行中 · 蜂窝 21001-21080 · 星辰 22001-22045 · 智能聚合 39999'
+        $BtnStart.IsEnabled = $false
+        $BtnStop.IsEnabled = $true
+    } else {
+        $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#E08A8A'))
+        $KernelText.Text = '内核未运行 · 点「启动内核」'
+        $BtnStart.IsEnabled = $true
+        $BtnStop.IsEnabled = $false
+    }
+    return $run
+}
+
+function Full-Reload([switch]$Probe) {
+    $StatusText.Text = if ($Probe) { '正在重新探测 80 个出口（约 1 分钟）…' } else { '正在同步蜂窝节点…' }
+    Pump
+    $extra = if ($Probe) { @() } else { @('-SkipProbe') }
+    $r = Invoke-Script 'gen-report.ps1' $extra
+    if ($r.Code -ne 0) { $StatusText.Text = "同步失败：$($r.Err.Trim())"; return $false }
+    [void](Load-Nodes)
+    $StatusText.Text = '正在并发测速（80 个节点，约 3 秒）…'
+    Pump
+    $ok = Measure-Latency
+    $script:ExpandedInit = $true
+    Render
+    $StatusText.Text = "数据更新于 $($script:DataStamp)　测速成功 $ok / $($script:Nodes.Count)　未测到延迟的节点显示「—」，不代表不可用"
+    return $true
+}
+
+function Sync-FromHoneycomb {
+    $StatusText.Text = '检测到蜂窝订阅已刷新，正在同步（重新生成配置 + 热重载内核）…'
+    Pump
+    $r = Invoke-Script 'gen-config.ps1'
+    if ($r.Code -ne 0) { $StatusText.Text = "重新生成配置失败：$($r.Err.Trim())"; return }
+    $cfg = Get-RunFile 'config.yaml'
+    $secret = Get-Secret
+    if ((Test-Kernel) -and $secret) {
         try {
-            $parsed = Get-Content -LiteralPath $dataFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($parsed.nodes) {
-                $script:Nodes = @($parsed.nodes)
-                if ($parsed.listen) { $script:ListenAddr = $parsed.listen }
-            }
+            $body = @{ path = $cfg } | ConvertTo-Json -Compress
+            [void](Invoke-WebRequest -Uri 'http://127.0.0.1:21909/configs?force=true' -Method Put `
+                -Headers @{ Authorization = "Bearer $secret" } -Body $body -ContentType 'application/json' -TimeoutSec 25)
+        } catch {
+            $StatusText.Text = "热重载失败（将尝试重启内核）：$($_.Exception.Message)"
+            Pump
+            Get-Process mihomo -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $Dir 'silent-start.vbs')`"" -WindowStyle Hidden
+            Start-Sleep -Seconds 4
+        }
+    }
+    [void](Full-Reload)
+}
+
+# ---------------- 巡检风控视图（原 pool-guard 控制台的能力，收进同一个面板） ----------------
+$BtnViewExport   = $win.FindName('BtnViewExport')
+$BtnViewGuard    = $win.FindName('BtnViewGuard')
+$ViewExport      = $win.FindName('ViewExport')
+$ViewGuard       = $win.FindName('ViewGuard')
+$ViewHint        = $win.FindName('ViewHint')
+$GSumTotal       = $win.FindName('GSumTotal')
+$GSumAlive       = $win.FindName('GSumAlive')
+$GSumDead        = $win.FindName('GSumDead')
+$GSumPure        = $win.FindName('GSumPure')
+$GSumBind        = $win.FindName('GSumBind')
+$LvBind          = $win.FindName('LvBind')
+$BtnGuardScan    = $win.FindName('BtnGuardScan')
+$BtnGuardFill    = $win.FindName('BtnGuardFill')
+$CmbGuardFilter  = $win.FindName('CmbGuardFilter')
+$TxtGuardSearch  = $win.FindName('TxtGuardSearch')
+$GuardCountText  = $win.FindName('GuardCountText')
+$LvGuard         = $win.FindName('LvGuard')
+$GuardBar        = $win.FindName('GuardBar')
+$GuardStatusText = $win.FindName('GuardStatusText')
+# XAML 里的 SelectedIndex 会在子项添加前生效，这里补一次，确保默认是「全部端口」
+$CmbGuardFilter.SelectedIndex = 0
+
+function New-GBrush([string]$hex) {
+    $b = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString($hex))
+    $b.Freeze()
+    return $b
+}
+$GBrGreen  = New-GBrush '#5FD08A'
+$GBrRed    = New-GBrush '#FF6B6B'
+$GBrYellow = New-GBrush '#E8C46B'
+$GBrGray   = New-GBrush '#7A7A85'
+$GBrBlue   = New-GBrush '#7FB2FF'
+$GBrPurple = New-GBrush '#C08CFF'
+$GBrActive = New-GBrush '#2C3F63'
+$GBrIdle   = New-GBrush '#26262C'
+
+$script:GuardPorts     = @(21001..21080) + @(22001..22045)
+$script:GuardMeta      = @{}
+$script:GuardBind      = @()
+$script:GuardBound     = @()
+$script:GuardResults   = @{}
+$script:GuardIndex     = @{}
+$script:GuardRows      = @()
+$script:GuardOc        = New-Object System.Collections.ObjectModel.ObservableCollection[object]
+$script:GuardQueue     = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+$script:GuardScanning  = $false
+$script:GuardScanStart = $null
+$script:GuardScanPool  = $null
+$script:GuardScanTasks = @()
+$script:GuardInited    = $false
+$script:GuardBindKey   = -1
+$script:GuardFillPs    = $null
+$script:GuardFillAsync = $null
+$script:ActiveView     = 'Export'
+
+function Set-GuardStatus([string]$msg) {
+    $GuardStatusText.Text = $msg
+    Write-PanelEvent 'guard' $msg
+}
+
+function Get-GuardMeta {
+    $map = @{}
+    $f = Get-RunFile 'nodes.json'
+    if (Test-Path -LiteralPath $f) {
+        try {
+            foreach ($n in (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json).nodes) { $map[[int]$n.port] = $n }
         } catch { }
     }
+    return $map
 }
 
-function Format-ProxyEntry($node, $fmt) {
-    $p = $node.port
-    $hp = if ($node.httpPort) { $node.httpPort } else { $p + 10000 }
-    $name = if ($node.orig) { $node.orig } else { $node.name }
-    $country = if ($node.country) { $node.country } else { '未知' }
-    $host = $script:ListenAddr
+function Get-BindingRows {
+    $rows = New-Object System.Collections.ArrayList
+    $cfgPath = 'C:\Users\1\.antigravity_tools\gui_config.json'
+    if (-not (Test-Path -LiteralPath $cfgPath)) { return $rows }
+    try { $cfg = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $rows }
+    $idToPort = @{}; $idToName = @{}
+    foreach ($px in $cfg.proxy.proxy_pool.proxies) {
+        if ($px.url -match ':(\d+)') { $idToPort[$px.id] = [int]$Matches[1]; $idToName[$px.id] = $px.name }
+    }
+    $emailById = @{}
+    $accPath = 'C:\Users\1\.antigravity_tools\accounts.json'
+    if (Test-Path -LiteralPath $accPath) {
+        try {
+            foreach ($a in (Get-Content -LiteralPath $accPath -Raw -Encoding UTF8 | ConvertFrom-Json).accounts) { $emailById[$a.id] = $a.email }
+        } catch { }
+    }
+    foreach ($prop in $cfg.proxy.proxy_pool.account_bindings.PSObject.Properties) {
+        $accId = $prop.Name
+        $pxId = [string]$prop.Value
+        $short = if ($accId.Length -ge 8) { $accId.Substring(0, 8) } else { $accId }
+        [void]$rows.Add([PSCustomObject]@{
+            Email     = if ($emailById.ContainsKey($accId)) { $emailById[$accId] } else { "未登记账号 $short" }
+            ProxyName = if ($idToName.ContainsKey($pxId)) { $idToName[$pxId] } else { '(代理条目缺失)' }
+            Port      = if ($idToPort.ContainsKey($pxId)) { $idToPort[$pxId] } else { 0 }
+        })
+    }
+    return $rows
+}
 
-    switch ($fmt) {
-        'flowtools_hash' { "socks5://$host`:$p#$name [$country]" }
-        'socks5h://'     { "socks5h://$host`:$p" }
-        'socks5://'      { "socks5://$host`:$p" }
-        'http://'        { "http://$host`:$hp" }
-        'raw'            { "$host`:$p" }
-        'csv'            { "socks5://$host`:$p,$name,$country,1" }
-        default          { "socks5://$host`:$p" }
+function New-GuardRow([int]$Port, $probe) {
+    $meta = $script:GuardMeta[$Port]
+    $brand = if ($Port -lt 22000) { '蜂窝' } else { '星辰' }
+    $country = if ($meta -and $meta.country) { $meta.country } else { '—' }
+    $gcc = if ($meta -and $meta.googleCountry) { $meta.googleCountry } else { '—' }
+    $name = if ($meta -and $meta.orig) { $meta.orig } else { '(未登记节点)' }
+    if ($probe) {
+        if ($probe.CfOk -and $probe.GoogleOk) { $status = '健康 · 双通'; $sbr = $GBrGreen }
+        elseif ($probe.CfOk)                  { $status = 'Google 不通'; $sbr = $GBrYellow }
+        elseif ($probe.GoogleOk)              { $status = 'Cloudflare 不通'; $sbr = $GBrYellow }
+        else                                  { $status = '不通'; $sbr = $GBrRed }
+        $exitIp = if ($probe.ExitIp) { $probe.ExitIp } else { '—' }
+    } else {
+        $status = '探测中…'; $sbr = $GBrGray; $exitIp = '…'
+    }
+    $isCn = ($gcc -eq 'China' -or $gcc -eq 'Hong Kong' -or $gcc -eq 'Macao')
+    $isPure = [bool]($meta -and $meta.antigravitySupported -and -not $isCn)
+    if ($isCn)       { $risk = '送中 · 剔除'; $rbr = $GBrRed }
+    elseif ($isPure) { $risk = 'Gemini 纯净'; $rbr = $GBrGreen }
+    else             { $risk = '观望'; $rbr = $GBrGray }
+    return [PSCustomObject]@{
+        Port        = $Port
+        Brand       = $brand
+        BrandBrush  = if ($Port -lt 22000) { $GBrBlue } else { $GBrPurple }
+        Name        = $name
+        Country     = $country
+        Risk        = $risk
+        RiskBrush   = $rbr
+        Status      = $status
+        StatusBrush = $sbr
+        ExitIp      = $exitIp
+        Alive       = [bool]($probe -and $probe.CfOk -and $probe.GoogleOk)
+        Probed      = [bool]$probe
+        IsBound     = [bool]($script:GuardBound -contains $Port)
+        IsPure      = $isPure
     }
 }
 
-$BtnCopyScenePool.Add_Click({
-    $idx = $CmbScene.SelectedIndex
-    if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
-    $s = $script:Scenes[$idx]
-    $key = if ($s.matchKey) { $s.matchKey } else { "$($s.id)Supported" }
-    
-    $pool = @($script:Nodes | Where-Object { $_.$key -eq $true } | Sort-Object healthScore -Descending)
-    if ($pool.Count -eq 0) {
-        $StatusText.Text = T 'msg_no_nodes' @{ scene = $s.name }
-        return
+function Initialize-Guard {
+    $script:GuardMeta  = Get-GuardMeta
+    $script:GuardBind  = @(Get-BindingRows)
+    $script:GuardBound = @($script:GuardBind | Where-Object { $_.Port -gt 0 } | Select-Object -ExpandProperty Port -Unique)
+    $script:GuardOc.Clear()
+    $script:GuardIndex = @{}
+    $i = 0
+    foreach ($p in $script:GuardPorts) {
+        $script:GuardOc.Add((New-GuardRow $p $null))
+        $script:GuardIndex[$p] = $i
+        $i++
     }
+    $script:GuardRows = @($script:GuardOc)
+    $script:GuardBindKey = -1
+    $LvGuard.ItemsSource = $script:GuardOc
+    $GuardCountText.Text = "显示 $($script:GuardRows.Count) / $($script:GuardRows.Count)"
+    $null = Refresh-GuardSummary
+    Refresh-GuardBindings
+}
+
+function Apply-GuardFilter {
+    if ($script:GuardScanning) { return }
+    $mode = ''
+    try { $mode = [string]$CmbGuardFilter.SelectedItem.Content } catch { }
+    $q = $TxtGuardSearch.Text.Trim().ToLower()
+    $list = New-Object System.Collections.ArrayList
+    foreach ($r in $script:GuardRows) {
+        $skip = $false
+        switch ($mode) {
+            '仅存活'             { if (-not $r.Alive) { $skip = $true } }
+            '仅不通'             { if ($r.Alive -or -not $r.Probed) { $skip = $true } }
+            '仅 Gemini 纯净可用'  { if (-not $r.IsPure) { $skip = $true } }
+            '仅账号绑定'          { if (-not $r.IsBound) { $skip = $true } }
+            '仅备选池'            { if ($r.IsBound) { $skip = $true } }
+        }
+        if ($skip) { continue }
+        if ($q) {
+            $hay = ("$($r.Port) $($r.Name) $($r.Country) $($r.Brand)").ToLower()
+            if (-not $hay.Contains($q)) { continue }
+        }
+        [void]$list.Add($r)
+    }
+    $LvGuard.ItemsSource = $list
+    $GuardCountText.Text = "显示 $($list.Count) / $($script:GuardRows.Count)"
+}
+
+function Refresh-GuardSummary {
+    $probed = @($script:GuardRows | Where-Object { $_.Probed })
+    $alive  = @($probed | Where-Object { $_.Alive })
+    $dead   = @($probed | Where-Object { -not $_.Alive })
+    $pure   = @($alive | Where-Object { $_.IsPure })
+    $GSumTotal.Text = "$($script:GuardRows.Count)"
+    $GSumAlive.Text = if ($probed.Count) { "$($alive.Count)" } else { '—' }
+    $GSumDead.Text  = if ($probed.Count) { "$($dead.Count)" } else { '—' }
+    $GSumPure.Text  = if ($probed.Count) { "$($pure.Count)" } else { '—' }
+    $bindAlive = 0
+    foreach ($b in $script:GuardBind) {
+        $r = $script:GuardRows | Where-Object { $_.Port -eq $b.Port } | Select-Object -First 1
+        if ($r -and $r.Alive) { $bindAlive++ }
+    }
+    $total = $script:GuardBind.Count
+    if (-not $probed.Count) {
+        $GSumBind.Text = "$total 个"
+        $GSumBind.Foreground = $GBrGray
+    } else {
+        $GSumBind.Text = "$bindAlive / $total"
+        $GSumBind.Foreground = if ($bindAlive -eq $total) { $GBrGreen } else { $GBrRed }
+    }
+    return @{ Alive = $alive.Count; Dead = $dead.Count; Probed = $probed.Count; Pure = $pure.Count; BindAlive = $bindAlive; BindTotal = $total }
+}
+
+function Refresh-GuardBindings {
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($b in $script:GuardBind) {
+        $r = $script:GuardRows | Where-Object { $_.Port -eq $b.Port } | Select-Object -First 1
+        if (-not $r -or -not $r.Probed) { $status = '待探测'; $sbr = $GBrGray }
+        elseif ($r.Alive)               { $status = '锚定正常 · HEALTHY'; $sbr = $GBrGreen }
+        else                            { $status = '确认故障 · CRITICAL'; $sbr = $GBrRed }
+        [void]$rows.Add([PSCustomObject]@{
+            Email       = $b.Email
+            PortText    = if ($b.Port) { "$($b.Port)" } else { '—' }
+            ProxyName   = $b.ProxyName
+            Status      = $status
+            StatusBrush = $sbr
+        })
+    }
+    $LvBind.ItemsSource = $rows
+}
+
+function Start-GuardScan {
+    $script:GuardQueue.Clear()
+    $script:GuardScanning = $true
+    $script:GuardScanStart = Get-Date
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, 24)
+    $pool.Open()
+    $script:GuardScanPool = $pool
+    $script:GuardScanTasks = @()
+    $sink = $script:GuardQueue
+    foreach ($p in $script:GuardPorts) {
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        $null = $ps.AddScript({
+            param($port, $sink)
+            $ip = (& curl.exe -s --max-time 6 --socks5-hostname "127.0.0.1:$port" https://api.ipify.org 2>$null)
+            $cf = (& curl.exe -s -o NUL --max-time 6 -w "%{http_code}" --socks5-hostname "127.0.0.1:$port" https://cp.cloudflare.com/generate_204 2>$null)
+            $gg = (& curl.exe -s -o NUL --max-time 6 -w "%{http_code}" --socks5-hostname "127.0.0.1:$port" https://www.google.com/generate_204 2>$null)
+            [void]$sink.Add([PSCustomObject]@{
+                Port     = [int]$port
+                ExitIp   = if ($ip) { "$ip".Trim() } else { '' }
+                CfOk     = ("$cf" -eq '204')
+                GoogleOk = ("$gg" -eq '204')
+            })
+        }).AddArgument($p).AddArgument($sink)
+        $script:GuardScanTasks += [PSCustomObject]@{ PS = $ps; Async = $ps.BeginInvoke() }
+    }
+}
+
+function Stop-GuardScan {
+    foreach ($h in $script:GuardScanTasks) {
+        try { [void]$h.PS.EndInvoke($h.Async) } catch { }
+        try { $h.PS.Dispose() } catch { }
+    }
+    $script:GuardScanTasks = @()
+    if ($script:GuardScanPool) {
+        try { $script:GuardScanPool.Close(); $script:GuardScanPool.Dispose() } catch { }
+        $script:GuardScanPool = $null
+    }
+    $script:GuardScanning = $false
+}
+
+function Switch-View([string]$v) {
+    $isGuard = ($v -eq 'Guard')
+    $script:ActiveView = if ($isGuard) { 'Guard' } else { 'Export' }
+    $ViewGuard.Visibility  = if ($isGuard) { 'Visible' } else { 'Collapsed' }
+    $ViewExport.Visibility = if ($isGuard) { 'Collapsed' } else { 'Visible' }
+    $BtnViewGuard.Background  = if ($isGuard) { $GBrActive } else { $GBrIdle }
+    $BtnViewExport.Background = if ($isGuard) { $GBrIdle } else { $GBrActive }
+    $ViewHint.Text = if ($isGuard) {
+        '体检全网出口、核对账号粘性锚定；写回由 pool-guard.ps1 安全执行'
+    } else {
+        '取用出口配置；或对全网 125 个出口做体检、看账号粘性锚定与风控状态'
+    }
+    if ($isGuard) {
+        if (-not (Test-Kernel)) {
+            Set-GuardStatus '⚠️ 内核未运行：所有出口都连不上。先切回「出口取用」点「启动内核」。'
+            return
+        }
+        if (-not $script:GuardInited) {
+            $script:GuardInited = $true
+            Initialize-Guard
+        }
+        if (-not $script:GuardScanning -and $script:GuardResults.Count -eq 0) {
+            Set-GuardStatus '就绪。点「开始全网巡检」实测 125 个出口（约 25 秒）。'
+        }
+    }
+}
+
+$BtnViewExport.Add_Click({ Switch-View 'Export' })
+$BtnViewGuard.Add_Click({ Switch-View 'Guard' })
+
+$BtnGuardScan.Add_Click({
+    if ($script:GuardScanning) { Set-GuardStatus '巡检正在进行中…'; return }
+    if (-not (Test-Kernel)) { Set-GuardStatus '⚠️ 内核未运行，无法巡检。请先切回「出口取用」点「启动内核」。'; return }
+    Set-GuardStatus '正在并发巡检 125 个端口…'
+    $script:GuardResults = @{}
+    $script:GuardInited = $true
+    Initialize-Guard
+    $GuardBar.Value = 0
+    Start-GuardScan
+    $script:GuardTimer.Start()
+})
+
+$BtnGuardFill.Add_Click({
+    if ($script:GuardScanning) { Set-GuardStatus '请等本轮巡检结束后再充盈备选池。'; return }
+    if ($script:GuardFillAsync) { Set-GuardStatus '充盈任务正在进行中…'; return }
+    $guardScript = Get-CoreFile 'pool-guard.ps1'
+    if (-not (Test-Path -LiteralPath $guardScript)) { Set-GuardStatus "找不到 pool-guard.ps1：$guardScript"; return }
+    $BtnGuardFill.IsEnabled = $false
+    Set-GuardStatus '正在后台充盈备选池（全量实测并安全回写 gui_config.json，约 1 分钟，界面可继续使用）…'
+    $script:GuardFillPs = [PowerShell]::Create()
+    $null = $script:GuardFillPs.AddScript({
+        param($sp)
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sp -Mode RefreshStandby 2>&1
+    }).AddArgument($guardScript)
+    $script:GuardFillAsync = $script:GuardFillPs.BeginInvoke()
+})
+
+$CmbGuardFilter.Add_SelectionChanged({ Apply-GuardFilter })
+$TxtGuardSearch.Add_TextChanged({ Apply-GuardFilter })
+
+$script:GuardTimer = New-Object Windows.Threading.DispatcherTimer
+$script:GuardTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+$script:GuardTimer.Add_Tick({
+    if ($script:ActiveView -ne 'Guard' -and -not $script:GuardScanning -and -not $script:GuardFillAsync) { return }
+
+    $absorbed = 0
+    while ($script:GuardQueue.Count -gt 0 -and $absorbed -lt 40) {
+        $item = $script:GuardQueue[0]
+        $script:GuardQueue.RemoveAt(0)
+        $absorbed++
+        if (-not $item) { continue }
+        $script:GuardResults[$item.Port] = $item
+        $idx = $script:GuardIndex[$item.Port]
+        if ($null -ne $idx) {
+            $row = New-GuardRow $item.Port $item
+            $script:GuardOc[$idx] = $row
+            $script:GuardRows[$idx] = $row
+        }
+    }
+
+    $done = $script:GuardResults.Count
+    $GuardBar.Value = [Math]::Min($done, 125)
+    if ($script:GuardScanning) {
+        $aliveNow = @($script:GuardResults.Values | Where-Object { $_.CfOk -and $_.GoogleOk }).Count
+        $GuardStatusText.Text = "正在并发巡检 125 个端口… 已完成 $done / 125 · 双通 $aliveNow"
+    }
+
+    $s = Refresh-GuardSummary
+    $key = ($s.Probed * 100) + $s.BindAlive
+    if ($key -ne $script:GuardBindKey) {
+        $script:GuardBindKey = $key
+        Refresh-GuardBindings
+    }
+
+    if ($script:GuardScanning -and $done -ge 125) {
+        Stop-GuardScan
+        $used = [Math]::Round(((Get-Date) - $script:GuardScanStart).TotalSeconds, 1)
+        Apply-GuardFilter
+        $msg = "巡检完成：双通存活 $($s.Alive) / 125，不通 $($s.Dead)，Gemini 纯净 $($s.Pure)，账号绑定健康 $($s.BindAlive)/$($s.BindTotal)，用时 ${used}s。"
+        if ($s.BindAlive -lt $s.BindTotal) { $msg += ' ⚠️ 有账号绑定节点故障：非确凿物理故障不要换绑，先复测确认。' }
+        Set-GuardStatus $msg
+    }
+
+    if ($script:GuardFillAsync -and $script:GuardFillAsync.IsCompleted) {
+        try {
+            $out = $script:GuardFillPs.EndInvoke($script:GuardFillAsync)
+            $hit = @($out | ForEach-Object { "$_" } | Where-Object { $_ -match '写入自检通过|充盈至|纯净清单|数量异常|BOM' })
+            $tail = if ($hit.Count) { ($hit | Select-Object -Last 2) -join ' ｜ ' } else { '已完成' }
+            Set-GuardStatus "备选池充盈结束：$tail"
+        } catch {
+            Set-GuardStatus "备选池充盈失败：$_"
+        } finally {
+            try { $script:GuardFillPs.Dispose() } catch { }
+            $script:GuardFillPs = $null
+            $script:GuardFillAsync = $null
+            $BtnGuardFill.IsEnabled = $true
+        }
+    }
+})
+$script:GuardTimer.Start()
+
+# ---------------- 事件绑定 ----------------
+$BtnStart.Add_Click({
+    $StatusText.Text = '正在启动内核…'
+    Pump
+    Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $Dir 'silent-start.vbs')`"" -WindowStyle Hidden
+    Start-Sleep -Seconds 4
+    [void](Update-KernelUi)
+    [void](Full-Reload)
+})
+
+$BtnStop.Add_Click({
+    Get-Process mihomo -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+    $script:Lat = @{}
+    [void](Update-KernelUi)
+    Render
+    $StatusText.Text = '内核已停止。所有指向 21001-21080 的浏览器环境会立即失去代理。'
+})
+
+$BtnRefresh.Add_Click({ [void](Full-Reload -Probe) })
+
+$BtnCopyAiPool = $win.FindName('BtnCopyAiPool')
+if ($BtnCopyAiPool) {
+    $BtnCopyAiPool.Add_Click({
+        $aiNodes = @($script:Nodes | Where-Object { $_.antigravitySupported } | Sort-Object healthScore -Descending)
+        if ($aiNodes.Count -eq 0) {
+            $StatusText.Text = '未发现支持反重力/Flow的节点。'
+            return
+        }
+        $fmt = $CmbFormat.SelectedItem
+        if ($fmt -eq 'JSON 数组 (全字段无损)') {
+            $list = foreach ($item in $aiNodes) {
+                $name = Get-NodeCleanName $item
+                [ordered]@{
+                    url = "socks5h://$($script:ListenAddr):$($item.port)"
+                    name = $name
+                    tags = @("gemini-pure")
+                    priority = 1
+                    is_healthy = $true
+                    latency = 380
+                    country = $item.country
+                    googleCountry = $item.googleCountry
+                    port = $item.port
+                }
+            }
+            $copyText = $list | ConvertTo-Json -Depth 3
+        } else {
+            $lines = foreach ($item in $aiNodes) {
+                Format-ProxyEntry $item $fmt
+            }
+            $copyText = $lines -join "`r`n"
+        }
+        try { [Windows.Clipboard]::SetText($copyText) } catch { }
+        $StatusText.Text = "⚡ 已复制 $($aiNodes.Count) 个反重力/Flow 原生支持代理至剪贴板（可直接导入 Antigravity 代理池）！"
+        $this.Content = "已复制 $($aiNodes.Count) 个节点"
+        $t = New-Object Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromSeconds(2)
+        $t.Tag = $this
+        $t.Add_Tick({
+            param($sender, $args)
+            $sender.Tag.Content = '⚡ 复制反重力纯净池'
+            $sender.Stop()
+        })
+        $t.Start()
+    })
+}
+
+if ($BtnCopyPhoneProxy) {
+    $BtnCopyPhoneProxy.Add_Click({
+        try { [Windows.Clipboard]::SetText('192.168.0.107:39999') } catch { }
+        $this.Content = '已复制'
+        $script:StatusText.Text = '已复制手机/局域网智能分流代理地址：192.168.0.107:39999'
+        $t = New-Object Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromSeconds(1.5)
+        $t.Tag = $this
+        $t.Add_Tick({
+            param($sender, $args)
+            $sender.Tag.Content = '复制代理地址'
+            $sender.Stop()
+        })
+        $t.Start()
+    })
+}
+
+if ($BtnPhoneCmd) {
+    $BtnPhoneCmd.Add_Click({
+        $cmd = 'settings put global http_proxy 192.168.0.107:39999'
+        try { [Windows.Clipboard]::SetText($cmd) } catch { }
+        $this.Content = '已复制命令'
+        $script:StatusText.Text = "已复制手机挂载命令（无需装App，Root下执行生效）：$cmd"
+        $t = New-Object Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromSeconds(1.5)
+        $t.Tag = $this
+        $t.Add_Tick({
+            param($sender, $args)
+            $sender.Tag.Content = '挂载命令'
+            $sender.Stop()
+        })
+        $t.Start()
+    })
+}
+$BtnSpeed.Add_Click({
+    $StatusText.Text = '正在并发测速…'
+    Pump
+    $ok = Measure-Latency
+    Render
+    $StatusText.Text = "测速完成：$ok / $($script:Nodes.Count) 个节点有响应"
+})
+
+$BtnExpand.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $true } })
+$BtnCollapse.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $false } })
+$CmbFilter.Add_SelectionChanged({ Render })
+$CmbFormat.Add_SelectionChanged({
     $fmt = $CmbFormat.SelectedItem
-    $lines = foreach ($item in $pool) { Format-ProxyEntry $item $fmt }
-    $copyText = $lines -join "`r`n"
-    try { [Windows.Clipboard]::SetText($copyText) } catch { }
-    $StatusText.Text = T 'msg_copied' @{ count = $pool.Count; scene = $s.name }
+    $StatusText.Text = "复制格式已切换为 $fmt（点任意行的「复制」按钮）"
 })
+$TxtSearch.Add_GotFocus({ if ($TxtSearch.Text -eq '搜索地区 / 城市 / 端口 / IP') { $TxtSearch.Text = '' } })
+$TxtSearch.Add_TextChanged({ if ($script:Nodes.Count) { Render } })
 
-$BtnCopyPhoneProxy.Add_Click({
-    try { [Windows.Clipboard]::SetText("192.168.0.107:39999") } catch { }
-    $StatusText.Text = '已复制手机/局域网分流代理地址：192.168.0.107:39999'
+# 自动同步：每 12 秒检查蜂窝订阅 profile 是否被刷新
+$script:Timer = New-Object Windows.Threading.DispatcherTimer
+$script:Timer.Interval = [TimeSpan]::FromSeconds(12)
+$script:Timer.Add_Tick({
+    try {
+        $info = Get-ProfileInfo
+        if ($info -and $info.Write) {
+            if ($script:LastWrite -and $info.Write -ne $script:LastWrite) {
+                $script:LastWrite = $info.Write
+                Sync-FromHoneycomb
+            } elseif (-not $script:LastWrite) {
+                $script:LastWrite = $info.Write
+            }
+        }
+        [void](Update-KernelUi)
+    } catch {
+        Write-PanelEvent 'sync-error' $_.Exception.Message
+        $StatusText.Text = '自动同步遇到问题，请查看 logs\panel.log；代理内核独立运行。'
+    }
 })
+$script:Timer.Start()
 
-$BtnPhoneCmd.Add_Click({
-    $cmd = 'settings put global http_proxy 192.168.0.107:39999'
-    try { [Windows.Clipboard]::SetText($cmd) } catch { }
-    $StatusText.Text = "已复制手机免App挂载命令：$cmd"
-})
+# ---------------- 启动 ----------------
+$script:ListenAddr = '127.0.0.1'
+try {
+    $info = Get-ProfileInfo
+    if ($info) {
+        $script:ProfilePath = $info.Path
+        $script:LastWrite = $info.Write
+        $StatusText.Text = "订阅来源：$($info.Path)"
+    }
+    [void](Update-KernelUi)
+    if (Load-Nodes) {
+        Render
+        if (Test-Kernel) {
+            $StatusText.Text = "正在并发测速（80 个节点，约 3 秒）…"
+            $ok = Measure-Latency
+            Render
+            $StatusText.Text = "数据更新于 $($script:DataStamp)　测速成功 $ok / $($script:Nodes.Count)　未测到延迟的节点显示「—」，不代表不可用"
+        } else {
+            $StatusText.Text = "数据更新于 $($script:DataStamp)　内核未运行，延迟未测（点「启动内核」后会自动测速）"
+        }
+    } else {
+        $StatusText.Text = '还没有 nodes.json，请点「刷新数据」生成。'
+    }
+} catch {
+    Write-PanelEvent 'startup-error' ($_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+    $StatusText.Text = '数据加载遇到问题，面板仍可操作；详情见 logs\panel.log。'
+}
 
-$BtnBatchSocks.Add_Click({
-    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'socks5://' }
-    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
-    $StatusText.Text = "已复制全量 $($script:Nodes.Count) 个 SOCKS5 端口列表。"
-})
+if ($View -eq 'Guard') { Switch-View 'Guard' }
 
-$BtnBatchHttp.Add_Click({
-    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'http://' }
-    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
-    $StatusText.Text = "已复制全量 $($script:Nodes.Count) 个 HTTP 端口列表。"
-})
-
-# 初始化语言与数据
-Load-NodesData
-Apply-Language 'zh'
-$CountText.Text = "当前加载节点: $($script:Nodes.Count)"
-$KernelText.Text = "Mihomo 内核已连接 · 监听: $script:ListenAddr"
-$Dot.Fill = (New-Object Windows.Media.SolidColorBrush([Windows.Media.Color]::FromArgb(255, 95, 208, 138)))
-
-# 启动窗口
-[void]$win.ShowDialog()
+try {
+    $app = New-Object Windows.Application
+    $app.ShutdownMode = [Windows.ShutdownMode]::OnMainWindowClose
+    $app.Add_DispatcherUnhandledException({
+        param($sender, $e)
+        Write-PanelEvent 'ui-error' ($e.Exception.GetType().FullName + ': ' + $e.Exception.Message)
+        $StatusText.Text = '面板操作遇到问题，详情见 logs\panel.log；代理内核保持运行。'
+        $e.Handled = $true
+    })
+    [void]$app.Run($win)
+} finally {
+    $script:Timer.Stop()
+    $script:ShowTimer.Stop()
+    $script:GuardTimer.Stop()
+    if ($script:GuardScanning) { Stop-GuardScan }
+    $script:Tray.Visible = $false
+    $script:Tray.Dispose()
+    $trayMenu.Dispose()
+    $script:ShowSignal.Dispose()
+    $script:GuardSignal.Dispose()
+    Write-PanelEvent 'stopped' $(if ($script:ExitRequested) { 'exit-menu' } else { 'unexpected-or-system' })
+    $script:mutex.ReleaseMutex()
+    $script:mutex.Dispose()
+}
