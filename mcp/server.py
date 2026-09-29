@@ -8,6 +8,7 @@ AgentProxyHub - Model Context Protocol (MCP) Server
 import sys
 import os
 import json
+import re
 import time
 import socket
 from typing import Dict, Any, List, Optional
@@ -27,6 +28,15 @@ FALLBACK_NODES = "D:\\Program Files\\FengWoBridge\\nodes.json"
 # 跨进程账本锁：MCP 可能被多个 Agent 客户端各拉一个实例（人手一个），
 # 加上 CloakMulti GUI 共写 bindings.json，读-改-写必须整段持锁防丢更新。
 BINDINGS_LOCK = os.path.join(DATA_DIR, "bindings.lock")
+
+# Antigravity Tools 的账号粘性锚定（只读）。注意与上面的环境锁定账本是两码事：
+# bindings.json 记「指纹浏览器环境 → 端口」，这里记「Google 账号 → 出口」，
+# 由 FengWoBridge 出口面板与 Antigravity Tools 自己维护，本服务只读不写。
+AG_CONFIG = os.environ.get("APHUB_ANTIGRAVITY_CONFIG") or r"C:\Users\1\.antigravity_tools\gui_config.json"
+AG_ACCOUNTS = os.environ.get("APHUB_ANTIGRAVITY_ACCOUNTS") or r"C:\Users\1\.antigravity_tools\accounts.json"
+
+# 本地出口桥接监听的端口段（FengWoBridge：蜂窝 21001-21080 + 星辰 22001-22045）
+EXIT_PORT_MIN, EXIT_PORT_MAX = 21001, 22045
 
 import contextlib
 
@@ -84,6 +94,91 @@ def save_bindings_data(data: Dict[str, Any]):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, BINDINGS_FILE)
+
+
+def get_snapshot_info(data: Dict[str, Any]) -> Dict[str, Any]:
+    """测绘快照的时间信息。
+
+    节点评分是"上次实测"的结果而不是当前状态，必须把快照年龄一并交代，
+    否则调用方会把 15 小时前的 S 级当成现在可用。
+    """
+    stamp = data.get("generatedAt")
+    age = None
+    if stamp:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                age = round((time.time() - time.mktime(time.strptime(stamp, fmt))) / 3600.0, 1)
+                break
+            except ValueError:
+                continue
+    return {"generated_at": stamp, "age_hours": age}
+
+
+def probe_local_ports(listen: str, ports: List[int], timeout: float = 0.8) -> Dict[int, bool]:
+    """对即将返回给调用方的端口做一次真实 TCP 预检。
+
+    只做 TCP 连通性、不发请求：本地内核可能已经挂了，不给运行态就会把一堆
+    连不上的端口当成可用出口返回（本项目就出过内核静默死亡、全部出口拒绝连接
+    而测绘文件仍显示 S 级的情况）。
+    """
+    out: Dict[int, bool] = {}
+    for p in ports:
+        try:
+            with socket.create_connection((listen, int(p)), timeout=timeout):
+                out[int(p)] = True
+        except OSError:
+            out[int(p)] = False
+    return out
+
+
+def get_antigravity_stickiness() -> List[Dict[str, Any]]:
+    """只读解析 Antigravity Tools 的账号粘性锚定（Google 账号 → 出口端口）。
+
+    与 bindings.json 的环境锁定账本相互独立；解析失败一律返回空列表，
+    绝不因为出口面板配置缺失而影响 MCP 其它能力。
+    """
+    if not os.path.exists(AG_CONFIG):
+        return []
+    try:
+        with open(AG_CONFIG, "r", encoding="utf-8-sig") as f:
+            cfg = json.load(f)
+        pool = (cfg.get("proxy") or {}).get("proxy_pool") or {}
+        proxies = pool.get("proxies") or []
+        bound = pool.get("account_bindings") or {}
+    except Exception:
+        return []
+
+    id_to_port: Dict[str, int] = {}
+    id_to_name: Dict[str, str] = {}
+    for px in proxies:
+        pid = px.get("id")
+        if not pid:
+            continue
+        m = re.search(r":(\d+)\s*$", str(px.get("url") or ""))
+        if m:
+            id_to_port[pid] = int(m.group(1))
+        id_to_name[pid] = px.get("name") or ""
+
+    email_by_id: Dict[str, str] = {}
+    if os.path.exists(AG_ACCOUNTS):
+        try:
+            with open(AG_ACCOUNTS, "r", encoding="utf-8-sig") as f:
+                for a in (json.load(f).get("accounts") or []):
+                    if a.get("id"):
+                        email_by_id[a["id"]] = a.get("email") or ""
+        except Exception:
+            pass
+
+    rows: List[Dict[str, Any]] = []
+    for acc_id, px_id in bound.items():
+        rows.append({
+            "account_id": acc_id,
+            "account": email_by_id.get(acc_id) or "(未登记账号)",
+            "port": id_to_port.get(px_id),
+            "node_name": id_to_name.get(px_id) or "",
+            "proxy_id": px_id,
+        })
+    return rows
 
 # ==============================================================================
 # 工具实现函数
@@ -183,11 +278,45 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
 
     # 排序：未锁定的在前，按健康分降序；healthScore 缺失按 0 处理，避免 None 比较崩溃
     matched.sort(key=lambda x: (not x["is_locked"], x["health_score"] or 0), reverse=True)
-    return {
+    top = matched[:limit]
+
+    # 运行态预检：只测即将返回的这几条，避免 125 次全量连接
+    open_map = probe_local_ports(listen_ip, [m["port"] for m in top])
+    for m in top:
+        m["port_open"] = open_map.get(int(m["port"]), False)
+
+    stickiness = get_antigravity_stickiness()
+    account_by_port = {s["port"]: s["account"] for s in stickiness if s.get("port")}
+    for m in top:
+        m["account_bound"] = account_by_port.get(int(m["port"]))
+
+    snap = get_snapshot_info(data)
+    ready = any(open_map.values())
+    out: Dict[str, Any] = {
         "scene": scene,
         "total_matched": len(matched),
-        "results": matched[:limit]
+        "results": top,
+        "snapshot": snap,
+        "local_exit": {
+            "listen": listen_ip,
+            "probed": len(top),
+            "open": sum(1 for v in open_map.values() if v),
+            "ready": ready,
+        },
+        "antigravity_account_stickiness": stickiness,
     }
+    if not ready:
+        out["warning"] = (
+            "本地出口内核未运行或端口未监听：以上端口现在全部连不上。"
+            r"请先启动 FengWoBridge 桥接（D:\Program Files\FengWoBridge\启动桥接.bat）。"
+            "节点评分来自测绘快照，不代表当前可用性。"
+        )
+    elif snap.get("age_hours") is not None and snap["age_hours"] >= 6:
+        out["warning"] = (
+            f"测绘快照已 {snap['age_hours']} 小时未刷新，评分可能过期；"
+            "端口存活已实测，但地区/送中判定以快照为准。"
+        )
+    return out
 
 def tool_get_proxy_command(args: Dict[str, Any]) -> Any:
     """生成指定端口在终端、PowerShell 或 Chrome 上的挂载启动命令"""
@@ -238,11 +367,19 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
     }
 
 def tool_get_profile_bindings(args: Dict[str, Any]) -> Any:
-    """查看当前所有环境的绑定锁定账本"""
+    """查看环境锁定账本 + Antigravity 账号粘性锚定（两套绑定互不相干）"""
     bindings = get_bindings_data()
     return {
         "total_locked": len(bindings),
-        "bindings": bindings
+        "bindings": bindings,
+        "ledger": "环境锁定账本：指纹浏览器环境 → 出口端口，本 MCP 与 CloakMulti 共写",
+        "antigravity_account_stickiness": get_antigravity_stickiness(),
+        "note": (
+            "两套绑定含义不同，不要混用：bindings 是「环境 → 端口」；"
+            "antigravity_account_stickiness 是「Google 账号 → 出口」，"
+            "由 FengWoBridge 出口面板维护，本服务只读。bindings 为空只说明"
+            "还没有环境锁过端口，不代表账号粘性不存在。"
+        ),
     }
 
 def _socks5_connect(listen: str, port: int, host: str, tport: int, timeout: float = 6.0) -> None:
@@ -327,7 +464,7 @@ TOOLS = [
     },
     {
         "name": "list_matched_proxies",
-        "description": "按场景需求智能筛选最优本地出口端口 (如为 Claude 寻找美区住宅高分节点)",
+        "description": "按场景需求智能筛选最优本地出口端口 (如为 Claude 寻找美区住宅高分节点)；返回附带端口真实存活、测绘快照年龄与账号粘性",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -368,7 +505,7 @@ TOOLS = [
     },
     {
         "name": "get_profile_bindings",
-        "description": "读取当前所有环境与端口的绑定账本记录",
+        "description": "读取环境锁定账本（环境→端口）与 Antigravity 账号粘性锚定（账号→出口）；两者含义不同",
         "inputSchema": {
             "type": "object",
             "properties": {}
