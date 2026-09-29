@@ -61,19 +61,35 @@ if ($SkipProbe -and (Test-Path -LiteralPath $ipCache)) {
         if ($kv.Count -ge 2) { $exitIp[$kv[0]] = $kv[1] }
     }
 } else {
-    Write-Output "正在探测 $($map.Count) 个端口的真实出口 IP..."
+    Write-Output "并发探测 $($map.Count) 个端口的真实出口 IP（24 路并行）..."
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, 24)
+    $pool.Open()
+    $tasks = @()
     foreach ($row in $map) {
-        $p = $row.ListenPort
-        $ip = ''
-        for ($try = 1; $try -le 2; $try++) {
-            $ip = (Invoke-Curl @('-s', '--ssl-no-revoke', '--max-time', '10', '--connect-timeout', '6',
-                    '--socks5-hostname', "$Listen`:$p", 'http://api.ipify.org')).Trim()
-            if ($ip -match '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') { break }
-            Start-Sleep -Milliseconds 150
-        }
-        if ($ip -notmatch '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') { $ip = 'FAIL' }
-        $exitIp[$p] = $ip
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        $null = $ps.AddScript({
+            param($port, $listen)
+            $ip = ''
+            for ($try = 1; $try -le 2; $try++) {
+                $raw = & curl.exe -s --ssl-no-revoke --max-time 10 --connect-timeout 6 --socks5-hostname "${listen}:${port}" 'http://api.ipify.org' 2>$null
+                $ip = if ($raw) { ($raw | Select-Object -First 1).ToString().Trim() } else { '' }
+                if ($ip -match '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') { break }
+                Start-Sleep -Milliseconds 150
+            }
+            if ($ip -notmatch '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') { $ip = 'FAIL' }
+            return [pscustomobject]@{ Port = $port; Ip = $ip }
+        }).AddArgument($row.ListenPort).AddArgument($Listen)
+        $tasks += [pscustomobject]@{ PS = $ps; Async = $ps.BeginInvoke() }
     }
+    foreach ($t in $tasks) {
+        try {
+            $res = $t.PS.EndInvoke($t.Async)
+            if ($res) { $exitIp["$($res.Port)"] = $res.Ip }
+        } catch { }
+        finally { $t.PS.Dispose() }
+    }
+    $pool.Dispose()
     ($exitIp.Keys | Sort-Object | ForEach-Object { "$_`t$($exitIp[$_])" }) |
         Set-Content -LiteralPath $ipCache -Encoding utf8
 }
