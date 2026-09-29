@@ -1726,6 +1726,7 @@ $BtnStop.Add_Click({
 $BtnRefresh.Add_Click({
     if ($script:ActiveView -eq 'Guard') {
         if (-not $script:GuardScanning) { Start-GuardScan }
+        $StatusText.Text = '全网巡检已开始（约 25 秒），下方表格实时更新'
     } else {
         [void](Full-Reload -Probe)
     }
@@ -1861,10 +1862,17 @@ if ($BtnPhoneCmd) {
     })
 }
 $BtnSpeed.Add_Click({
-    if (-not $script:Nodes.Count) { $StatusText.Text = '请先点「刷新数据」加载数据'; return }
-    Start-Latency
-    $script:LatTimer.Stop()
-    $script:LatTimer.Start()
+    # 视图感知：巡检视图里就是全网巡检；出口视图里测延迟。两边状态栏都给即时反馈
+    if ($script:ActiveView -eq 'Guard') {
+        if ($script:GuardScanning) { Set-GuardStatus '巡检正在进行中，请稍候…' } else { Start-GuardScan }
+        $StatusText.Text = '全网巡检已开始（约 25 秒），下方表格实时更新'
+    } else {
+        if (-not $script:Nodes.Count) { $StatusText.Text = '正在先加载数据…'; [void](Full-Reload) ; return }
+        Start-Latency
+        $script:LatTimer.Stop()
+        $script:LatTimer.Start()
+        $StatusText.Text = '⏱ 正在并发测速（后台进行，此窗口可正常操作）…'
+    }
 })
 
 $BtnExpand.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $true } })
