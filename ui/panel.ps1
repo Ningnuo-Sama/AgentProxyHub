@@ -808,9 +808,19 @@ function Invoke-Script([string]$file, [string[]]$extra = @()) {
     $p.WaitForExit()
     return @{ Code = $p.ExitCode; Out = $out; Err = $err }
 }
+# 异步启动引擎脚本（不阻塞 UI）
+function Start-ScriptAsync([string]$file, [string[]]$extra = @()) {
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', (Get-CoreFile $file)) + $extra
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = 'powershell.exe'
+    $psi.Arguments = ($argList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    return [Diagnostics.Process]::Start($psi)
+}
 
 function Load-Nodes {
-    $f = Join-Path $Dir 'nodes.json'
+    $f = Get-RunFile 'nodes.json'
     if (-not (Test-Path -LiteralPath $f)) { return $false }
     $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
     $script:Nodes = @($j.nodes)
@@ -820,11 +830,17 @@ function Load-Nodes {
 }
 
 # 并发测速：80 个请求同时发出（串行要几分钟）
-function Measure-Latency {
+# 并发测速（分段式：先发请求，再由定时器收割，UI 不卡）
+function Start-Latency {
     $script:Lat = @{}
-    if (-not (Test-Kernel)) { return 0 }
+    $script:LatDone = $false
+    $script:LatClient = $null
+    $script:LatTasks = $null
+    $script:LatNames = $null
+    $script:LatStarted = $null
+    if (-not (Test-Kernel)) { $script:LatDone = $true; return }
     $secret = Get-Secret
-    if (-not $secret) { return 0 }
+    if (-not $secret) { $script:LatDone = $true; return }
     $client = New-Object System.Net.Http.HttpClient
     $client.Timeout = [TimeSpan]::FromSeconds(12)
     $client.DefaultRequestHeaders.Add('Authorization', "Bearer $secret")
@@ -835,19 +851,31 @@ function Measure-Latency {
         $u = "http://127.0.0.1:21909/proxies/$($n.name)/delay?timeout=3000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
         try { $tasks.Add($client.GetStringAsync($u)) } catch { $tasks.Add($null) }
     }
-    try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]($tasks | Where-Object { $_ }), 25000) | Out-Null } catch { }
+    $script:LatClient = $client
+    $script:LatTasks = $tasks
+    $script:LatNames = $names
+    $script:LatStarted = [DateTime]::Now
+}
+function Poll-Latency {
+    if ($script:LatDone) { return }
+    $elapsed = (([DateTime]::Now) - $script:LatStarted).TotalMilliseconds
+    $allDone = $true
+    foreach ($t in $script:LatTasks) { if ($t -and -not $t.IsCompleted) { $allDone = $false; break } }
+    if (-not $allDone -and $elapsed -lt 26000) { return }
     $ok = 0
-    for ($i = 0; $i -lt $tasks.Count; $i++) {
-        $t = $tasks[$i]
+    for ($i = 0; $i -lt $script:LatTasks.Count; $i++) {
+        $t = $script:LatTasks[$i]
         if ($t -and $t.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
             try {
                 $d = ($t.Result | ConvertFrom-Json).delay
-                if ($d -gt 0) { $script:Lat[$names[$i]] = [int]$d; $ok++ }
+                if ($d -gt 0) { $script:Lat[$script:LatNames[$i]] = [int]$d; $ok++ }
             } catch { }
         }
     }
-    $client.Dispose()
-    return $ok
+    try { $script:LatClient.Dispose() } catch { }
+    $script:LatClient = $null; $script:LatTasks = $null; $script:LatNames = $null
+    $script:LatDone = $true
+    $script:LatOk = $ok
 }
 
 function Get-Tags($n) {
@@ -1204,19 +1232,62 @@ function Update-KernelUi {
     return $run
 }
 
+# 异步刷新流水线：引擎子进程 + 测速收割均由定时器驱动，窗口全程可操作
+$script:ReloadProc = $null
+$script:ReloadProbe = $false
+$script:ReloadTimer = New-Object Windows.Threading.DispatcherTimer
+$script:ReloadTimer.Interval = [TimeSpan]::FromMilliseconds(800)
+$script:ReloadTimer.Add_Tick({
+    try {
+        if ($script:ReloadProc -and -not $script:ReloadProc.HasExited) {
+            $StatusText.Text = "$(if ($script:ReloadProbe) { '正在全量探测 125 个出口（约 1 分钟）' } else { '正在同步节点数据' })… 窗口可正常操作"
+            return
+        }
+        $code = if ($script:ReloadProc) { $script:ReloadProc.ExitCode } else { 1 }
+        $script:ReloadProc = $null
+        $script:ReloadTimer.Stop()
+        if ($code -ne 0) { $StatusText.Text = "同步失败（引擎退出码 $code），请查看 logs"; return }
+        [void](Load-Nodes)
+        Start-Latency
+        $script:LatTimer.Stop()
+        $script:LatTimer.Start()
+    } catch {
+        $script:ReloadTimer.Stop()
+        $StatusText.Text = "刷新异常：$($_.Exception.Message)"
+    }
+})
+$script:LatTimer = New-Object Windows.Threading.DispatcherTimer
+$script:LatTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+$script:LatTimer.Add_Tick({
+    try {
+        if (-not $script:LatDone) {
+            $pending = 0
+            foreach ($t in $script:LatTasks) { if ($t -and -not $t.IsCompleted) { $pending++ } }
+            $StatusText.Text = "正在并发测速（$($script:Nodes.Count) 个节点，剩余 $pending）…"
+            return
+        }
+        $script:LatTimer.Stop()
+        $script:ExpandedInit = $true
+        Render
+        $StatusText.Text = "数据更新于 $($script:DataStamp)　在线 $($script:AliveTotal) / $($script:Nodes.Count)　测速成功 $(if ($null -ne $script:LatOk) { $script:LatOk } else { 0 }) 个"
+    } catch {
+        $script:LatTimer.Stop()
+        $StatusText.Text = "测速异常：$($_.Exception.Message)"
+    }
+})
+
 function Full-Reload([switch]$Probe) {
-    $StatusText.Text = if ($Probe) { '正在重新探测 80 个出口（约 1 分钟）…' } else { '正在同步蜂窝节点…' }
+    if ($script:ReloadProc -and -not $script:ReloadProc.HasExited) {
+        $StatusText.Text = '上一轮刷新还在跑，请等它结束（状态栏有提示）'
+        return $false
+    }
+    $StatusText.Text = if ($Probe) { '正在全量探测 125 个出口（约 1 分钟）… 窗口可正常操作' } else { '正在同步节点数据…' }
     Pump
     $extra = if ($Probe) { @() } else { @('-SkipProbe') }
-    $r = Invoke-Script 'gen-report.ps1' $extra
-    if ($r.Code -ne 0) { $StatusText.Text = "同步失败：$($r.Err.Trim())"; return $false }
-    [void](Load-Nodes)
-    $StatusText.Text = '正在并发测速（80 个节点，约 3 秒）…'
-    Pump
-    $ok = Measure-Latency
-    $script:ExpandedInit = $true
-    Render
-    $StatusText.Text = "数据更新于 $($script:DataStamp)　测速成功 $ok / $($script:Nodes.Count)　未测到延迟的节点显示「—」，不代表不可用"
+    $script:ReloadProbe = [bool]$Probe
+    $script:ReloadProc = Start-ScriptAsync 'gen-report.ps1' $extra
+    $script:ReloadTimer.Stop()
+    $script:ReloadTimer.Start()
     return $true
 }
 
@@ -1306,7 +1377,7 @@ function Set-GuardStatus([string]$msg) {
 
 function Get-GuardMeta {
     $map = @{}
-    $f = Join-Path $Dir 'nodes.json'
+    $f = Get-RunFile 'nodes.json'
     if (Test-Path -LiteralPath $f) {
         try {
             foreach ($n in (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json).nodes) { $map[[int]$n.port] = $n }
