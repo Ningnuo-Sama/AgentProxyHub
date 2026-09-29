@@ -21,3 +21,7 @@ venv/
 Thumbs.db
 *.bak*
 *.tmp
+
+# 运行期敏感数据（订阅凭据 / 内核控制密钥）
+bridge.json
+config/bridge.json
