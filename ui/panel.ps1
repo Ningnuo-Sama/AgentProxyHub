@@ -1723,7 +1723,13 @@ $BtnStop.Add_Click({
     $StatusText.Text = '内核已停止。所有指向 21001-21080 的浏览器环境会立即失去代理。'
 })
 
-$BtnRefresh.Add_Click({ [void](Full-Reload -Probe) })
+$BtnRefresh.Add_Click({
+    if ($script:ActiveView -eq 'Guard') {
+        if (-not $script:GuardScanning) { Start-GuardScan }
+    } else {
+        [void](Full-Reload -Probe)
+    }
+})
 
 # ---- 场景靶场（scenes.json 驱动，缺省回退内置四场景）----
 $script:Scenes = @()
