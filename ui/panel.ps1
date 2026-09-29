@@ -1,5 +1,4 @@
-﻿# AgentProxyHub 桌面控制面板（WPF 原生窗口，无浏览器、无本地服务）
-# 由前身 FengWoBridge 的成熟面板移植而来（源：D:\GitHub\FengWoBridge panel.ps1 @193f000）
+﻿# AgentProxyHub —— 取用代理配置的控制面板（WPF 原生窗口，无浏览器、无本地服务）
 # 数据来源：nodes.json（由 gen-report.ps1 生成）+ 内核控制 API（延迟测速）
 # 特性：按地区折叠分组、一环境一端口随取随用、蜂窝订阅刷新后自动同步、诚实标注未探测项
 
@@ -11,9 +10,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ---- AgentProxyHub 运行布局 ----------------------------------------------------
-# 前身 FengWoBridge 把节点/配置放在根目录，AgentProxyHub 分到 data\ 与 config\；
-# 差异集中在这两个解析函数里，找不到就回退根目录，保证两边都能跑。
+# ---- AgentProxyHub 运行布局 ----
+# 数据/配置分目录存放；找不到回退根目录，两边都能跑
 function Get-RunFile([string]$name) {
     foreach ($sub in @('data', 'config', '')) {
         $p = if ($sub) { Join-Path $Dir "$sub\$name" } else { Join-Path $Dir $name }
@@ -197,7 +195,7 @@ $script:HttpFormats = @('http://')
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AgentProxyHub · 出口取用 / 巡检风控" Height="780" Width="1240" MinHeight="540" MinWidth="900"
+        Title="AgentProxyHub · 智能代理与环境调度中枢" Height="780" Width="1240" MinHeight="540" MinWidth="900"
         WindowStartupLocation="CenterScreen" Background="#131316" Foreground="#E9E9EC"
         FontFamily="Microsoft YaHei UI" FontSize="13" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
@@ -410,7 +408,9 @@ $script:HttpFormats = @('http://')
           <Button x:Name="BtnStop" Content="停止内核" Margin="6,0,0,0"/>
           <Button x:Name="BtnRefresh" Content="刷新数据" Margin="6,0,0,0"/>
           <Button x:Name="BtnSpeed" Content="重新测速" Margin="6,0,0,0"/>
-          <Button x:Name="BtnCopyAiPool" Content="⚡ 复制反重力纯净池" Margin="10,0,0,0" Background="#1B432C"/>
+          <TextBlock Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="12,0,6,0"/>
+          <ComboBox x:Name="CmbScene" Width="185" VerticalAlignment="Center"/>
+          <Button x:Name="BtnCopyScenePool" Content="⚡ 复制场景池" Margin="8,0,0,0" Background="#1B432C"/>
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="复制格式" Opacity="0.65" VerticalAlignment="Center"/>
@@ -474,7 +474,10 @@ $script:HttpFormats = @('http://')
         <TextBlock Grid.Column="1" x:Name="CountText" Margin="16,0,0,0" Opacity="0.75" VerticalAlignment="Center"/>
         <TextBox Grid.Column="2" x:Name="TxtSearch" Margin="16,0,10,0" VerticalAlignment="Center"/>
         <StackPanel Grid.Column="3" Orientation="Horizontal">
-          <Button x:Name="BtnExpand" Content="全部展开"/>
+          <Button x:Name="BtnBatchP1" Content="📋 P1 智能解析格式" Background="#23232A"/>
+          <Button x:Name="BtnBatchSocks" Content="📋 导出全部 SOCKS5" Margin="6,0,0,0" Background="#23232A"/>
+          <Button x:Name="BtnBatchHttp" Content="📋 导出全部 HTTP" Margin="6,0,0,0" Background="#23232A"/>
+          <Button x:Name="BtnExpand" Content="全部展开" Margin="10,0,0,0"/>
           <Button x:Name="BtnCollapse" Content="全部折叠" Margin="6,0,0,0"/>
         </StackPanel>
       </Grid>
@@ -672,6 +675,11 @@ $BtnStart    = $win.FindName('BtnStart')
 $BtnStop     = $win.FindName('BtnStop')
 $BtnRefresh  = $win.FindName('BtnRefresh')
 $BtnSpeed    = $win.FindName('BtnSpeed')
+$CmbScene    = $win.FindName('CmbScene')
+$BtnCopyScenePool = $win.FindName('BtnCopyScenePool')
+$BtnBatchP1  = $win.FindName('BtnBatchP1')
+$BtnBatchSocks = $win.FindName('BtnBatchSocks')
+$BtnBatchHttp = $win.FindName('BtnBatchHttp')
 $BtnExpand   = $win.FindName('BtnExpand')
 $BtnCollapse = $win.FindName('BtnCollapse')
 $CmbFormat   = $win.FindName('CmbFormat')
@@ -762,7 +770,7 @@ function Pump {
 }
 
 function Get-BridgeInfo {
-    $f = Get-RunFile 'bridge.json'
+    $f = Join-Path $Dir 'bridge.json'
     if (-not (Test-Path -LiteralPath $f)) { return $null }
     try { return (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
 }
@@ -802,7 +810,7 @@ function Invoke-Script([string]$file, [string[]]$extra = @()) {
 }
 
 function Load-Nodes {
-    $f = Get-RunFile 'nodes.json'
+    $f = Join-Path $Dir 'nodes.json'
     if (-not (Test-Path -LiteralPath $f)) { return $false }
     $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
     $script:Nodes = @($j.nodes)
@@ -1087,6 +1095,7 @@ function New-Row($n) {
 }
 
 function Render {
+    Update-SceneButton
     $list = Get-Filtered
     $Groups.Children.Clear()
 
@@ -1216,7 +1225,7 @@ function Sync-FromHoneycomb {
     Pump
     $r = Invoke-Script 'gen-config.ps1'
     if ($r.Code -ne 0) { $StatusText.Text = "重新生成配置失败：$($r.Err.Trim())"; return }
-    $cfg = Get-RunFile 'config.yaml'
+    $cfg = Join-Path $Dir 'config.yaml'
     $secret = Get-Secret
     if ((Test-Kernel) -and $secret) {
         try {
@@ -1297,7 +1306,7 @@ function Set-GuardStatus([string]$msg) {
 
 function Get-GuardMeta {
     $map = @{}
-    $f = Get-RunFile 'nodes.json'
+    $f = Join-Path $Dir 'nodes.json'
     if (Test-Path -LiteralPath $f) {
         try {
             foreach ($n in (Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json).nodes) { $map[[int]$n.port] = $n }
@@ -1548,7 +1557,7 @@ $BtnGuardScan.Add_Click({
 $BtnGuardFill.Add_Click({
     if ($script:GuardScanning) { Set-GuardStatus '请等本轮巡检结束后再充盈备选池。'; return }
     if ($script:GuardFillAsync) { Set-GuardStatus '充盈任务正在进行中…'; return }
-    $guardScript = Get-CoreFile 'pool-guard.ps1'
+    $guardScript = Join-Path $Dir 'pool-guard.ps1'
     if (-not (Test-Path -LiteralPath $guardScript)) { Set-GuardStatus "找不到 pool-guard.ps1：$guardScript"; return }
     $BtnGuardFill.IsEnabled = $false
     Set-GuardStatus '正在后台充盈备选池（全量实测并安全回写 gui_config.json，约 1 分钟，界面可继续使用）…'
@@ -1645,25 +1654,60 @@ $BtnStop.Add_Click({
 
 $BtnRefresh.Add_Click({ [void](Full-Reload -Probe) })
 
-$BtnCopyAiPool = $win.FindName('BtnCopyAiPool')
-if ($BtnCopyAiPool) {
-    $BtnCopyAiPool.Add_Click({
-        $aiNodes = @($script:Nodes | Where-Object { $_.antigravitySupported } | Sort-Object healthScore -Descending)
-        if ($aiNodes.Count -eq 0) {
-            $StatusText.Text = '未发现支持反重力/Flow的节点。'
+# ---- 场景靶场（scenes.json 驱动，缺省回退内置四场景）----
+$script:Scenes = @()
+$scenesFile = Get-RunFile 'scenes.json'
+if (Test-Path -LiteralPath $scenesFile) {
+    try { $script:Scenes = Get-Content -LiteralPath $scenesFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+}
+if (-not $script:Scenes -or $script:Scenes.Count -eq 0) {
+    $script:Scenes = @(
+        [pscustomobject]@{ id='antigravity'; name='✨ 反重力 / Gemini (Google原生)'; chipBg='#1B432C'; matchKey='antigravitySupported' },
+        [pscustomobject]@{ id='claude'; name='🟣 Claude 专属 (Anthropic直连)'; chipBg='#3B1E4A'; matchKey='claudeSupported' },
+        [pscustomobject]@{ id='openai'; name='🟢 ChatGPT / OpenAI (API高速)'; chipBg='#1A3A2A'; matchKey='openaiSupported' },
+        [pscustomobject]@{ id='facebook'; name='🔵 Facebook / 海外社媒 (住宅纯净)'; chipBg='#1E2E4A'; matchKey='facebookSupported' }
+    )
+}
+foreach ($s in $script:Scenes) { [void]$CmbScene.Items.Add($s.name) }
+if ($CmbScene.Items.Count -gt 0) { $CmbScene.SelectedIndex = 0 }
+
+function Update-SceneButton {
+    if (-not $CmbScene -or -not $BtnCopyScenePool) { return }
+    $idx = $CmbScene.SelectedIndex
+    if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
+    $s = $script:Scenes[$idx]
+    $matchedCount = 0
+    if ($script:Nodes) {
+        $key = if ($s.matchKey) { $s.matchKey } else { "$($s.id)Supported" }
+        $matchedCount = @($script:Nodes | Where-Object { $_.$key -eq $true }).Count
+    }
+    $BtnCopyScenePool.Content = "⚡ 复制场景池 ($matchedCount)"
+    if ($s.chipBg) {
+        try { $BtnCopyScenePool.Background = (New-Object Windows.Media.BrushConverter).ConvertFromString($s.chipBg) } catch { }
+    }
+}
+$CmbScene.Add_SelectionChanged({ Update-SceneButton })
+
+$BtnCopyScenePool.Add_Click({
+        $idx = $CmbScene.SelectedIndex
+        if ($idx -lt 0 -or $idx -ge $script:Scenes.Count) { return }
+        $s = $script:Scenes[$idx]
+        $key = if ($s.matchKey) { $s.matchKey } else { "$($s.id)Supported" }
+        $pool = @($script:Nodes | Where-Object { $_.$key -eq $true } | Sort-Object healthScore -Descending)
+        if ($pool.Count -eq 0) {
+            $StatusText.Text = "当前未发现适用于「$($s.name)」的节点，请先刷新数据。"
             return
         }
         $fmt = $CmbFormat.SelectedItem
         if ($fmt -eq 'JSON 数组 (全字段无损)') {
-            $list = foreach ($item in $aiNodes) {
+            $list = foreach ($item in $pool) {
                 $name = Get-NodeCleanName $item
                 [ordered]@{
                     url = "socks5h://$($script:ListenAddr):$($item.port)"
                     name = $name
-                    tags = @("gemini-pure")
+                    tags = @($s.id)
                     priority = 1
                     is_healthy = $true
-                    latency = 380
                     country = $item.country
                     googleCountry = $item.googleCountry
                     port = $item.port
@@ -1671,25 +1715,39 @@ if ($BtnCopyAiPool) {
             }
             $copyText = $list | ConvertTo-Json -Depth 3
         } else {
-            $lines = foreach ($item in $aiNodes) {
-                Format-ProxyEntry $item $fmt
-            }
+            $lines = foreach ($item in $pool) { Format-ProxyEntry $item $fmt }
             $copyText = $lines -join "`r`n"
         }
         try { [Windows.Clipboard]::SetText($copyText) } catch { }
-        $StatusText.Text = "⚡ 已复制 $($aiNodes.Count) 个反重力/Flow 原生支持代理至剪贴板（可直接导入 Antigravity 代理池）！"
-        $this.Content = "已复制 $($aiNodes.Count) 个节点"
+        $StatusText.Text = "⚡ 已复制 $($pool.Count) 个「$($s.name)」场景节点至剪贴板（格式: $fmt）"
+        $this.Content = "已复制 $($pool.Count) 个节点"
         $t = New-Object Windows.Threading.DispatcherTimer
         $t.Interval = [TimeSpan]::FromSeconds(2)
         $t.Tag = $this
         $t.Add_Tick({
             param($sender, $args)
-            $sender.Tag.Content = '⚡ 复制反重力纯净池'
             $sender.Stop()
+            Update-SceneButton
         })
         $t.Start()
     })
-}
+
+# ---- 批量导出（P1 / SOCKS5 / HTTP）----
+$BtnBatchP1.Add_Click({
+    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'IP:端口' }
+    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
+    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个端口（P1 智能解析格式）"
+})
+$BtnBatchSocks.Add_Click({
+    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'socks5://' }
+    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
+    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个 SOCKS5 端口"
+})
+$BtnBatchHttp.Add_Click({
+    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'http://' }
+    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
+    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个 HTTP 端口"
+})
 
 if ($BtnCopyPhoneProxy) {
     $BtnCopyPhoneProxy.Add_Click({

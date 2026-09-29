@@ -1,10 +1,12 @@
 @echo off
 chcp 936 >nul
-title AgentProxyHub - 停止服务
-cd /d "%~dp0\.."
-
-echo 正在安全停止 AgentProxyHub 进程与内核监听...
-taskkill /f /im mihomo.exe >nul 2>&1
-echo [OK] 已停止内核进程。
+setlocal
+cd /d "%~dp0"
+echo ========================================================
+echo       AgentProxyHub · 停止后台代理内核
+echo ========================================================
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name mihomo -ErrorAction SilentlyContinue | Stop-Process -Force; '已安全停止 mihomo 代理内核进程。'"
+echo.
 timeout /t 2 >nul
 exit
