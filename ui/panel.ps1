@@ -1511,12 +1511,70 @@ function Refresh-GuardSummary {
 }
 
 function Refresh-GuardBindings {
+    # 先对绑定端口做一发并行实时 TCP 探活（本地回环，1 秒内完成），
+    # 让状态列在没有跑巡检时也能即时给出结论，不再显示「待探测」。
+    $tcpMap = @{}
+    $tcpTasks = @{}
+    foreach ($b in $script:GuardBind) {
+        if ($b.Port -gt 0 -and -not $tcpTasks.ContainsKey($b.Port)) {
+            try {
+                $c = New-Object Net.Sockets.TcpClient
+                $tcpTasks[$b.Port] = @{ C = $c; T = $c.ConnectAsync('127.0.0.1', $b.Port) }
+            } catch { }
+        }
+    }
+    Start-Sleep -Milliseconds 900
+    foreach ($p in $tcpTasks.Keys) {
+        $t = $tcpTasks[$p]
+        $tcpMap[$p] = ($t.T.IsCompleted -and $t.C.Connected)
+        try { $t.C.Close() } catch { }
+    }
+
+    # 当场测速：对 7 个绑定端口并行调内核延迟 API（本地回环，约 3 秒封顶）
+    $latMap = @{}
+    $secret = Get-Secret
+    if ($secret) {
+        $lc = New-Object System.Net.Http.HttpClient
+        $lc.Timeout = [TimeSpan]::FromSeconds(4)
+        $lc.DefaultRequestHeaders.Add('Authorization', "Bearer $secret")
+        $ltasks = @{}
+        foreach ($b in $script:GuardBind) {
+            $meta0 = $script:GuardMeta[$b.Port]
+            if ($b.Port -gt 0 -and $meta0 -and $meta0.name -and -not $ltasks.ContainsKey($b.Port)) {
+                $u = "http://127.0.0.1:21909/proxies/$($meta0.name)/delay?timeout=3000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
+                try { $ltasks[$b.Port] = $lc.GetStringAsync($u) } catch { }
+            }
+        }
+        try {
+            [System.Threading.Tasks.Task]::WaitAll(@($ltasks.Values | Where-Object { $_ }), 3500) | Out-Null
+        } catch { }
+        foreach ($p in $ltasks.Keys) {
+            $tk = $ltasks[$p]
+            if ($tk -and $tk.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+                try { $latMap[$p] = ($tk.Result | ConvertFrom-Json).delay } catch { }
+            }
+        }
+        $lc.Dispose()
+    }
+
     $rows = New-Object System.Collections.ArrayList
     foreach ($b in $script:GuardBind) {
         $r = $script:GuardRows | Where-Object { $_.Port -eq $b.Port } | Select-Object -First 1
-        if (-not $r -or -not $r.Probed) { $status = '待探测'; $sbr = $GBrGray }
-        elseif ($r.Alive)               { $status = '锚定正常 · HEALTHY'; $sbr = $GBrGreen }
-        else                            { $status = '确认故障 · CRITICAL'; $sbr = $GBrRed }
+        $meta = $script:GuardMeta[$b.Port]
+        $lat = $latMap[$b.Port]
+        if ($r -and $r.Probed) {
+            if ($r.Alive) { $status = if ($lat) { "锚定正常 · ${lat}ms" } else { '锚定正常 · HEALTHY' }; $sbr = $GBrGreen }
+            else          { $status = '确认故障 · CRITICAL'; $sbr = $GBrRed }
+        } elseif ($tcpMap[$b.Port]) {
+            if ($meta -and $meta.ip) {
+                $loc = if ($meta.country) { $meta.country } else { $meta.googleCountry }
+                $status = if ($lat) { "体检正常 · $loc · ${lat}ms" } else { "体检正常 · $loc" }; $sbr = $GBrGreen
+            } else {
+                $status = if ($lat) { "端口在线 · ${lat}ms" } else { '端口在线 · 体检数据待更新' }; $sbr = $GBrBlue
+            }
+        } else {
+            $status = '出口不通 · 需排查'; $sbr = $GBrRed
+        }
         [void]$rows.Add([PSCustomObject]@{
             Email       = $b.Email
             PortText    = if ($b.Port) { "$($b.Port)" } else { '—' }
