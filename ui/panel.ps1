@@ -404,10 +404,8 @@ $script:HttpFormats = @('http://')
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
           <Ellipse x:Name="Dot" Width="9" Height="9" Fill="#7A7A85" VerticalAlignment="Center"/>
           <TextBlock x:Name="KernelText" Text="正在检测内核…" Margin="8,0,0,0" VerticalAlignment="Center"/>
-          <Button x:Name="BtnStart" Content="启动内核" Margin="16,0,0,0"/>
-          <Button x:Name="BtnStop" Content="停止内核" Margin="6,0,0,0"/>
-          <Button x:Name="BtnRefresh" Content="刷新数据" Margin="6,0,0,0"/>
-          <Button x:Name="BtnSpeed" Content="重新测速" Margin="6,0,0,0"/>
+          <Button x:Name="BtnHealth" Content="🩺 体检一次" Margin="16,0,0,0" Background="#2C3F63"/>
+          <Button x:Name="BtnMaintain" Content="⚙ 维护" Margin="6,0,0,0"/>
           <TextBlock Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="12,0,6,0"/>
           <ComboBox x:Name="CmbScene" Width="185" VerticalAlignment="Center"/>
           <Button x:Name="BtnCopyScenePool" Content="⚡ 复制场景池" Margin="8,0,0,0" Background="#1B432C"/>
@@ -474,10 +472,7 @@ $script:HttpFormats = @('http://')
         <TextBlock Grid.Column="1" x:Name="CountText" Margin="16,0,0,0" Opacity="0.75" VerticalAlignment="Center"/>
         <TextBox Grid.Column="2" x:Name="TxtSearch" Margin="16,0,10,0" VerticalAlignment="Center"/>
         <StackPanel Grid.Column="3" Orientation="Horizontal">
-          <Button x:Name="BtnBatchP1" Content="📋 P1 智能解析格式" Background="#23232A"/>
-          <Button x:Name="BtnBatchSocks" Content="📋 导出全部 SOCKS5" Margin="6,0,0,0" Background="#23232A"/>
-          <Button x:Name="BtnBatchHttp" Content="📋 导出全部 HTTP" Margin="6,0,0,0" Background="#23232A"/>
-          <Button x:Name="BtnExpand" Content="全部展开" Margin="10,0,0,0"/>
+          <Button x:Name="BtnExpand" Content="全部展开"/>
           <Button x:Name="BtnCollapse" Content="全部折叠" Margin="6,0,0,0"/>
         </StackPanel>
       </Grid>
@@ -671,15 +666,10 @@ $StatusText  = $win.FindName('StatusText')
 $CountText   = $win.FindName('CountText')
 $Groups      = $win.FindName('Groups')
 $Scroll      = $win.FindName('Scroll')
-$BtnStart    = $win.FindName('BtnStart')
-$BtnStop     = $win.FindName('BtnStop')
-$BtnRefresh  = $win.FindName('BtnRefresh')
-$BtnSpeed    = $win.FindName('BtnSpeed')
+$BtnHealth   = $win.FindName('BtnHealth')
+$BtnMaintain = $win.FindName('BtnMaintain')
 $CmbScene    = $win.FindName('CmbScene')
 $BtnCopyScenePool = $win.FindName('BtnCopyScenePool')
-$BtnBatchP1  = $win.FindName('BtnBatchP1')
-$BtnBatchSocks = $win.FindName('BtnBatchSocks')
-$BtnBatchHttp = $win.FindName('BtnBatchHttp')
 $BtnExpand   = $win.FindName('BtnExpand')
 $BtnCollapse = $win.FindName('BtnCollapse')
 $CmbFormat   = $win.FindName('CmbFormat')
@@ -1221,13 +1211,9 @@ function Update-KernelUi {
     if ($run) {
         $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#5FD08A'))
         $KernelText.Text = '内核运行中 · 蜂窝 21001-21080 · 星辰 22001-22045 · 智能聚合 39999'
-        $BtnStart.IsEnabled = $false
-        $BtnStop.IsEnabled = $true
     } else {
         $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#E08A8A'))
         $KernelText.Text = '内核未运行 · 点「启动内核」'
-        $BtnStart.IsEnabled = $true
-        $BtnStop.IsEnabled = $false
     }
     return $run
 }
@@ -1705,16 +1691,29 @@ $script:GuardTimer.Add_Tick({
 $script:GuardTimer.Start()
 
 # ---------------- 事件绑定 ----------------
-$BtnStart.Add_Click({
+# ---------------- 主按钮：体检一次（唯一的日常操作按钮）----------------
+$BtnHealth.Add_Click({
+    if ($script:ActiveView -eq 'Guard') {
+        if (-not $script:GuardScanning) { Start-GuardScan }
+        $StatusText.Text = '🩺 全网体检已开始（约 25 秒），下方表格实时更新'
+    } else {
+        [void](Full-Reload -Probe)
+        $StatusText.Text = '🩺 正在全量体检 125 个出口（约 1 分钟，后台进行，窗口可正常操作）'
+    }
+})
+
+# ---------------- 维护菜单（冷门操作全部收编于此）----------------
+$script:MaintMenu = New-Object Windows.Forms.ContextMenuStrip
+$miStart = $script:MaintMenu.Items.Add('▶ 启动内核')
+$miStart.Add_Click({
     $StatusText.Text = '正在启动内核…'
-    Pump
     Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $Dir 'silent-start.vbs')`"" -WindowStyle Hidden
     Start-Sleep -Seconds 4
     [void](Update-KernelUi)
     [void](Full-Reload)
 })
-
-$BtnStop.Add_Click({
+$miStop = $script:MaintMenu.Items.Add('■ 停止内核（浏览器环境会断代理）')
+$miStop.Add_Click({
     Get-Process mihomo -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 1
     $script:Lat = @{}
@@ -1722,14 +1721,24 @@ $BtnStop.Add_Click({
     Render
     $StatusText.Text = '内核已停止。所有指向 21001-21080 的浏览器环境会立即失去代理。'
 })
-
-$BtnRefresh.Add_Click({
-    if ($script:ActiveView -eq 'Guard') {
-        if (-not $script:GuardScanning) { Start-GuardScan }
-        $StatusText.Text = '全网巡检已开始（约 25 秒），下方表格实时更新'
-    } else {
-        [void](Full-Reload -Probe)
-    }
+[void]$script:MaintMenu.Items.Add('-')
+$miSpeed = $script:MaintMenu.Items.Add('⏱ 仅重新测速（不重新体检）')
+$miSpeed.Add_Click({
+    if (-not $script:Nodes.Count) { $StatusText.Text = '请先「体检一次」加载数据'; return }
+    Start-Latency
+    $script:LatTimer.Stop()
+    $script:LatTimer.Start()
+    $StatusText.Text = '⏱ 正在并发测速（后台进行，窗口可正常操作）…'
+})
+[void]$script:MaintMenu.Items.Add('-')
+$miP1 = $script:MaintMenu.Items.Add('📋 复制全部端口（P1 智能解析格式）')
+$miP1.Add_Click({ Invoke-BatchExport 'IP:端口' 'P1 智能解析格式' })
+$miSocks = $script:MaintMenu.Items.Add('📋 复制全部 SOCKS5')
+$miSocks.Add_Click({ Invoke-BatchExport 'socks5://' 'SOCKS5' })
+$miHttp = $script:MaintMenu.Items.Add('📋 复制全部 HTTP')
+$miHttp.Add_Click({ Invoke-BatchExport 'http://' 'HTTP' })
+$BtnMaintain.Add_Click({
+    $script:MaintMenu.Show([Windows.Forms.Cursor]::Position)
 })
 
 # ---- 场景靶场（scenes.json 驱动，缺省回退内置四场景）----
@@ -1810,22 +1819,13 @@ $BtnCopyScenePool.Add_Click({
         $t.Start()
     })
 
-# ---- 批量导出（P1 / SOCKS5 / HTTP）----
-$BtnBatchP1.Add_Click({
-    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'IP:端口' }
+# ---- 批量导出（维护菜单调用）----
+function Invoke-BatchExport([string]$fmt, [string]$label) {
+    if (-not $script:Nodes.Count) { $StatusText.Text = '请先「体检一次」加载数据'; return }
+    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n $fmt }
     try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
-    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个端口（P1 智能解析格式）"
-})
-$BtnBatchSocks.Add_Click({
-    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'socks5://' }
-    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
-    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个 SOCKS5 端口"
-})
-$BtnBatchHttp.Add_Click({
-    $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n 'http://' }
-    try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
-    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个 HTTP 端口"
-})
+    $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个端口（$label）"
+}
 
 if ($BtnCopyPhoneProxy) {
     $BtnCopyPhoneProxy.Add_Click({
@@ -1861,19 +1861,7 @@ if ($BtnPhoneCmd) {
         $t.Start()
     })
 }
-$BtnSpeed.Add_Click({
-    # 视图感知：巡检视图里就是全网巡检；出口视图里测延迟。两边状态栏都给即时反馈
-    if ($script:ActiveView -eq 'Guard') {
-        if ($script:GuardScanning) { Set-GuardStatus '巡检正在进行中，请稍候…' } else { Start-GuardScan }
-        $StatusText.Text = '全网巡检已开始（约 25 秒），下方表格实时更新'
-    } else {
-        if (-not $script:Nodes.Count) { $StatusText.Text = '正在先加载数据…'; [void](Full-Reload) ; return }
-        Start-Latency
-        $script:LatTimer.Stop()
-        $script:LatTimer.Start()
-        $StatusText.Text = '⏱ 正在并发测速（后台进行，此窗口可正常操作）…'
-    }
-})
+
 
 $BtnExpand.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $true } })
 $BtnCollapse.Add_Click({ foreach ($e in $Groups.Children) { $e.IsExpanded = $false } })
