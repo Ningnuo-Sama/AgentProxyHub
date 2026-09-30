@@ -448,6 +448,69 @@ def tool_test_proxy_target(args: Dict[str, Any]) -> Any:
             "error": str(e)[:200]
         }
 
+CONFIDENCE_STATE_FILE = os.path.join(DATA_DIR, "confidence_state.json")
+
+
+def tool_audit_confidence(args: Dict[str, Any]) -> Any:
+    """读取节点时序置信度快照（core/confidence_engine.py 产出）。
+
+    只读审计：返回各端口加权置信分、观察钟、漂移史与一票否决原因。
+    可选 refresh=true 时同步触发一轮轻量巡检（现役绑定 + S/A 级端口），
+    绝不自动改绑端口——老号迁移必须走上层人工/Agent 决策。
+    """
+    refresh = bool(args.get("refresh"))
+    if refresh:
+        import subprocess as _sp
+        try:
+            _sp.run([sys.executable, os.path.join(ROOT_DIR, "core", "confidence_engine.py"),
+                     "--scope", str(args.get("scope", "bound"))],
+                    capture_output=True, creationflags=0x08000000, timeout=300)
+        except Exception as e:
+            return {"ok": False, "error": f"巡检触发失败: {e}"}
+
+    if not os.path.exists(CONFIDENCE_STATE_FILE):
+        return {"ok": False, "error": "尚无置信度快照，请先 refresh=true 触发首轮巡检",
+                "hint": "python core/confidence_engine.py"}
+
+    try:
+        with open(CONFIDENCE_STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception as e:
+        return {"ok": False, "error": f"快照读取失败: {e}"}
+
+    ports = state.get("ports", {})
+    min_score = args.get("min_score")
+    only_vetoed = bool(args.get("only_vetoed"))
+
+    items = []
+    for port, r in ports.items():
+        if only_vetoed and not r.get("vetoed"):
+            continue
+        if min_score is not None and r.get("score", 0) < float(min_score):
+            continue
+        items.append({
+            "port": int(port),
+            "tier": r.get("tier"),
+            "score": r.get("score"),
+            "observeHours": r.get("observeHours"),
+            "baseline": {"ip": r.get("baselineIp"), "country": r.get("baselineCountry")},
+            "lastProbe": r.get("lastProbe"),
+            "vetoed": r.get("vetoed", False),
+            "vetoReason": r.get("vetoReason") or None,
+            "recentDrifts": (r.get("driftEvents") or [])[-3:],
+        })
+    items.sort(key=lambda x: -x.get("score", 0))
+
+    return {
+        "ok": True,
+        "updatedAt": state.get("updatedAt"),
+        "total": len(items),
+        "scoring": "物理稳定性40% + 大区合规30% + 协议健康30%；送中/离线/洲际漂移7天内一票否决",
+        "note": "高分节点仅作为备选推荐，禁止据此强切老号绑定",
+        "ports": items[: int(args.get("limit", 20))],
+    }
+
+
 # ==============================================================================
 # MCP 协议工具定义
 # ==============================================================================
@@ -524,6 +587,21 @@ TOOLS = [
             "required": ["port"]
         },
         "handler": tool_test_proxy_target
+    },
+    {
+        "name": "audit_confidence",
+        "description": "审计节点时序置信度：加权评分（稳定性40%/合规30%/健康30%）、观察钟、漂移史、一票否决；可选 refresh 触发实时巡检。只读，不改绑端口",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "refresh": {"type": "boolean", "description": "触发一轮实时巡检后再返回（默认 false）"},
+                "scope": {"type": "string", "description": "巡检范围: bound(现役+S/A级) 或 all", "default": "bound"},
+                "min_score": {"type": "number", "description": "只返回不低于该分数的端口"},
+                "only_vetoed": {"type": "boolean", "description": "只看被一票否决的端口（风控高危清单）"},
+                "limit": {"type": "integer", "description": "返回数量上限", "default": 20}
+            }
+        },
+        "handler": tool_audit_confidence
     }
 ]
 
