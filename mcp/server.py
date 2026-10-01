@@ -413,7 +413,7 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
         candidates = tool_list_matched_proxies({"scene": scene, "country": country, "min_rating": args.get("min_rating", "B"), "limit": 20})
         rows = [row for row in candidates.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked")]
         if not rows:
-            return {"success": False, "code": "no_healthy_candidate", "bindings_changed": False}
+            return {"success": False, "code": "no_healthy_candidate", "bindings_changed": False, "auto_rebind": True}
         candidate = rows[0]
         with _bindings_lock():
             bindings = get_bindings_data()
