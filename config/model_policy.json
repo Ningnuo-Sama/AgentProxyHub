@@ -18,6 +18,13 @@
     "provider": "antigravity",
     "purpose": "日常模型不可用时的本地降级"
   },
+  "glm": {
+    "model": "glm-5.3-flash",
+    "provider": "zhipu",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "credential_ref": "zhipu_glm_flash",
+    "purpose": "低成本业务判定与结构化审核"
+  },
   "routing": {
     "manual_control_required": true,
     "auto_upgrade_to_highest": false,
