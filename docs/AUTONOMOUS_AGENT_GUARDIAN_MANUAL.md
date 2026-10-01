@@ -5,6 +5,8 @@
 > 交互原则：用户只提出目标，Agent 自动执行；正常状态静默；重要结果通过鲸管家气泡/必要时微信通知。
 >
 > 本文是其他 Agent 接手时的单一入口。动态状态以运行目录、接口和日志为准，不以本文替代现场检查。
+>
+> **实现状态口径（2026-10-01 代码审计）**：本文把“代码已实现”“已接入运行链路”“已完成真实验收”严格分开。`✅ 已实现` 仅表示源码中存在并可被调用；`⚠️ 部分/候选` 表示有代码但依赖运行数据、外部服务或正式接入未证实；`❌ 未实现` 表示本仓库没有对应实现。旧章节中的架构目标和拍板事项不是完成证明。
 
 ---
 
@@ -518,6 +520,111 @@ Gemini 故障可切 GLM（若该链路已启用）
 
 ---
 
-## 13. 变更记录
+## 13. 代码实现状态（以源码审计为准）
+
+### 13.1 已实现（代码可直接调用）
+
+| 能力 | 证据/入口 | 边界 |
+|---|---|---|
+| MCP stdio JSON-RPC | `mcp/server.py`：`initialize`、`tools/list`、`tools/call` | 宿主启动时固化工具表，改代码后必须重启客户端 |
+| 场景/节点筛选 | `list_scenes`、`list_matched_proxies` | 依赖 `config/scenes.json` 与 `data/nodes.json`；静态评级不是实时可用性 |
+| 本地端口 TCP 预检 | `probe_local_ports`、筛选结果 `port_open/ready` | 只证明本地监听，不证明目标站点、地区或账号业务可用 |
+| SOCKS5 目标链路测试 | `test_proxy_target` | 真实完成 SOCKS5 CONNECT；不等同完整 HTTP/业务响应验证 |
+| 环境→端口幂等绑定 | `bind_profile_proxy` + `bindings.lock` + 原子替换 | 已绑定给其他 Profile 时拒绝抢占；没有解绑工具 |
+| 双账本只读解析 | `get_profile_bindings`、`get_antigravity_stickiness` | `bindings.json` 是环境→端口；Antigravity 是账号→出口，后者只读 |
+| 一键挂载命令 | `get_proxy_command` | 只生成 PowerShell/Bash/Chrome/Claude Code 命令，不执行注入 |
+| 时序置信度巡检 | `core/confidence_engine.py`、`audit_confidence` | 40/30/30 加权、观察钟、漂移与一票否决；只建议，不自动改绑 |
+| Google 国家只读核验与建议 | `google_verify_proxy`、`agent_recommend_proxy` | 以 Google Country version 为证据；需要人工/上层批准，`auto_rebind=false` |
+| 上游凭据登记与脱敏读取 | `set_upstream_credential`、`get_upstream_sources` | 写入运行目录 `upstreams.json`；默认脱敏，`include_secret=true` 才返回明文 |
+| 上游抓取与 LKG 快照 | `core/upstream_fetcher.py`、`refresh_upstream_nodes` | HTTPS、支持 `api_token/subscription_url/profile_path`；失败源保留 last-known-good |
+| 节点池同步/重建入口 | `core/sync_nodes.py`，支持 `--rebuild` | 生成/维护 `data/nodes.json`；实际 mihomo 启动仍取决于运行包与配置 |
+| 鲸管家 best-effort 通知客户端 | `core/jingguanjia_notify.py`、MCP `notify_jingguanjia` | `127.0.0.1:8766` 默认端点不可用时不阻断代理；不是完整事件总线 |
+| 轻量自治状态与安全闸 | `core/autonomy_core.py`、MCP `autonomy_status`/`autonomy_action` | 事件7天清理、开关原子落盘、路由/下载建议；不自动改绑、不执行下载 |
+| 人民币报价与网络路线建议 | MCP `pricing_quote`、`proxy_network_route` | 未核验供应商返回“待核价”；仅建议，不发起付费请求或修改系统代理 |
+
+### 13.2 部分实现/候选，不能宣称已完成
+
+| 目标 | 当前事实 |
+|---|---|
+| AgentProxyHub 正式部署 | `LOCAL_MAINTENANCE.md` 同时保留“正式运行副本迁移目标/尚未部署”与后续迁移记录；必须现场核对 `D:\Program Files\AgentProxyHub`、PID、端口和日志，源码更新不会自动部署 |
+| 端口池与成熟面板 | 本仓库代码存在同步和启动脚本，但运行能力依赖 mihomo、geo 数据、`config`/`data`；不能仅凭 README 的发行版描述认定可用 |
+| 鲸管家联动 | 仅有 best-effort HTTP notify 客户端；启动脚本未证明已接入全部启动、恢复、价格、降级事件 |
+| 价格/用量观察与人民币统一报价 | 已有 `pricing_quote`：本地文本规则可返回 ¥0，其余返回 CNY/待核价；尚无真实供应商用量账本与已核验商业费率 |
+| Gemini↔GLM 自动降级 | 本仓库没有对应模型路由状态机/熔断与恢复实现；不可把设计章节当作已实现 |
+| 官网授权自动提取 | 本仓库没有浏览器控制器；只能由宿主/浏览器工具另行完成，且需用户登录 |
+| OpenViking 经验读写 | 本仓库没有 OpenViking 客户端或写入实现；“治理规则”是文档约定 |
+| 手机/局域网网关 | 本仓库没有可核对的网关服务入口；README 中的地址不能作为当前运行证明 |
+| 自动注入 P1/Cloak/AdsPower 等浏览器 | 没有对应 injector/适配器实现；MCP 只返回命令或写环境绑定账本 |
+| 统一事件总线/微信出站 | `jingguanjia_notify.py` 仅提供 HTTP best-effort 通知；Hermes 微信发送、ACK、重试和事件持久化未在本仓库实现 |
+| 7 天任务摘要与清理 | 本仓库未发现统一任务摘要 schema、生命周期清理器或价格账单存储实现 |
+
+### 13.3 当前 MCP 工具完整清单（以 `mcp/server.py` 的 `TOOLS` 为准，共17项）
+
+| 工具 | 作用 | 写入/副作用 |
+|---|---|---|
+| `autonomy_status` | 读取自治状态快照 | 只读 |
+| `pricing_quote` | 返回人民币报价或待核价结果 | 只读，不发起付费调用 |
+| `proxy_network_route` | 返回直连/代理/阻断建议 | 只读，不改系统代理 |
+| `autonomy_action` | 设置自治开关、清理事件、查看摘要 | 写自治状态或事件文件，不改绑定 |
+| `notify_jingguanjia` | 发送鲸管家气泡通知 | 本机 HTTP best-effort |
+| `google_verify_proxy` | 通过 Google Country version 只读验证端口国家 | 无绑定写入 |
+| `agent_recommend_proxy` | 汇总 Google 核验与置信度，给出 `retain/hold` 建议 | 不自动换绑 |
+| `refresh_upstream_nodes` | 拉取已登记上游并更新快照；支持 `dry_run` | 非 dry-run 写快照，失败保留旧快照 |
+| `set_upstream_credential` | 登记/更新上游源 | 写 `upstreams.json`，凭据敏感 |
+| `get_upstream_sources` | 读取上游源及状态 | 默认 Token 脱敏；明文读取需显式参数 |
+| `list_scenes` | 列出场景靶场 | 无 |
+| `list_matched_proxies` | 按场景/国家/评级筛选并补充端口探活、快照年龄、绑定信息 | 只读 |
+| `get_proxy_command` | 生成终端、Chrome、Claude Code 挂载命令 | 不执行命令 |
+| `bind_profile_proxy` | 锁定 Profile→端口 | 写 `bindings.json`，带跨进程锁与原子写 |
+| `get_profile_bindings` | 读取环境账本及 Antigravity 账号粘性 | 只读 |
+| `test_proxy_target` | 经 SOCKS5 测试目标主机连通和延迟 | 只读网络访问 |
+| `audit_confidence` | 读取置信快照；`refresh=true` 触发 `confidence_engine.py` | 刷新会写 `confidence_state.json`，不改绑 |
+
+> 注意：当前 `proxy_network_route`、`pricing_quote` 已进入 `TOOLS`，但仍是只读建议/待核价能力；`usage_status`、`usage_action`、`browser_open_site`、`browser_read_page` 仍未在本仓库实现。宿主工具表在客户端启动时固化，更新后必须重启 MCP 消费方。
+
+### 13.4 新模块运行方式与最小验证
+
+```powershell
+# 进入源码根目录
+cd D:\GitHub\AgentProxyHub
+
+# MCP：stdio 服务（不要把普通日志写到 stdout）
+python mcp\server.py
+
+# MCP 端到端自测（临时数据目录，不污染运行数据）
+python mcp\test_mcp.py
+
+# 节点池同步；需要时先调用 PowerShell 建池脚本
+python core\sync_nodes.py
+python core\sync_nodes.py --rebuild
+
+# 时序置信度：日常只巡检绑定 + S/A；全量需显式指定
+python core\confidence_engine.py --scope bound
+python core\confidence_engine.py --scope all
+python core\confidence_engine.py --show
+
+# 鲸管家健康等待/发送 best-effort 通知
+python core\jingguanjia_notify.py --wait-health
+python core\jingguanjia_notify.py --text "AgentProxyHub 状态已更新"
+
+# 启动脚本（会打开面板；是否实际启动内核取决于 bin/config/data）
+启动AgentProxyHub.bat
+scripts\mcp-server.bat
+```
+
+运行前检查：`config/scenes.json`、`data/nodes.json`、`data/bindings.json`、`bin/mihomo.exe` 与 geo 数据是否存在；不要把真实 Token 放进命令行或 Git。正式副本与源码分离，必须单独核对部署状态。
+
+### 13.5 验证分级
+
+- **代码/语法**：`python -m py_compile mcp/server.py core/*.py`（只能证明可编译）。
+- **MCP 契约**：`python mcp/test_mcp.py`（临时目录；覆盖握手、列举、筛选、命令、上游 dry-run/登记/读取）。
+- **真实出口**：对具体端口运行 `test_proxy_target`，必要时再用 `google_verify_proxy`；监听和静态 `nodes.json` 不足以证明可用。
+- **真实部署**：核对运行副本路径、进程 PID、`logs/panel.log`、端口探活和实际目标请求；源码修改不等于已发布。
+- **边界**：本次文档审计没有启动服务、迁移运行副本、提交凭据、切换端口或验证付费供应商能力。
+
+---
+
+## 14. 变更记录
 
 - 2026-10-01：汇总已拍板的 AgentProxyHub 唯一入口、鲸管家合并、浏览器授权、FengWoBridge 退役、网络分流、人民币报价、7 天缓存、模型降级、Agent MCP 和 OpenViking 治理规则。
+- 2026-10-01：按源码审计补充已实现/未实现标记、当前 12 项 MCP 工具、上游/LKG/置信度/通知模块运行说明；明确目标契约不等于代码完成。

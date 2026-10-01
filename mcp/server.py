@@ -698,11 +698,194 @@ def tool_get_upstream_sources(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def tool_autonomy_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    """只读自治快照；没有证据时不宣称驻场进程正在运行。"""
+    path = os.path.join(DATA_DIR, "autonomy_state.json")
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            state = json.load(f)
+        if not isinstance(state, dict):
+            raise ValueError("自治快照必须为对象")
+    except FileNotFoundError:
+        return {"ok": True, "status": "unknown", "available": False,
+                "code": "autonomy_state_missing", "auto_rebind": False}
+    except (OSError, ValueError):
+        return {"ok": False, "status": "unknown", "code": "autonomy_state_invalid",
+                "recoverable": True, "auto_rebind": False}
+    # 只暴露状态字段，避免把模型凭据或完整响应带入 MCP。
+    fields = ("status", "updated_at", "updatedAt", "mode", "active_model",
+              "last_check_at", "last_success_at", "fallback_active")
+    return {"ok": True, "available": True, "source": "snapshot", "live_verified": False,
+            "state": {key: state[key] for key in fields if key in state and
+                      isinstance(state[key], (str, int, float, bool, type(None)))}, "auto_rebind": False}
+
+
+def tool_pricing_quote(args: Dict[str, Any]) -> Dict[str, Any]:
+    """最小人民币规则：只确认本地文本处理零供应商费用，其余待核价。"""
+    provider = str(args.get("provider") or "").strip().lower()
+    capability = str(args.get("capability") or "").strip()
+    parameters = args.get("parameters") or {}
+    if not provider or not capability or not isinstance(parameters, dict):
+        return {"ok": False, "code": "invalid_argument", "currency": "CNY"}
+    free = provider == "local" and capability == "text.generate"
+    return {"ok": True, "provider": provider, "capability": capability,
+            "currency": "CNY", "estimated_cny": 0.0 if free else None,
+            "status": "rule_based" if free else "pending_verification",
+            "display": "预计 ¥0.00" if free else "待核价",
+            "rule_version": "minimal-cny-v1", "verified": False,
+            "note": "本地文本规则仅计供应商费用，不含硬件电费" if free else "缺少已核验人民币规则；不猜测价格，不发起付费调用"}
+
+
+def tool_proxy_network_route(args: Dict[str, Any]) -> Dict[str, Any]:
+    """只读路线建议，不改系统代理、内核或账号绑定。"""
+    import ipaddress
+    from urllib.parse import urlsplit
+    target = args.get("target")
+    if not isinstance(target, str) or not target.strip():
+        return {"ok": False, "code": "invalid_target", "route": "blocked"}
+    try:
+        url = urlsplit(target if "://" in target else "https://" + target)
+        host = (url.hostname or "").lower().rstrip(".")
+        size = args.get("size_bytes", 0)
+        if url.scheme not in ("http", "https") or not host or url.username or url.password:
+            raise ValueError("invalid target")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError("invalid size")
+    except ValueError:
+        return {"ok": False, "code": "invalid_argument", "route": "blocked"}
+    mode = args.get("mode", "auto")
+    if mode not in ("auto", "direct", "off"):
+        return {"ok": False, "code": "invalid_mode", "route": "blocked"}
+    try:
+        local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = host == "localhost" or host.endswith(".localhost") or host.endswith(".local")
+    ai_domains = ("google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+                  "anthropic.com", "claude.ai", "openai.com", "chatgpt.com", "gemini.google")
+    proxy = any(host == d or host.endswith("." + d) for d in ai_domains)
+    limit = 100 * 1024 * 1024  # MVP 保守默认值，可在统一路线核心落地后改用运行配置。
+    protected = not local and bool(args.get("metered", False)) and size >= limit
+    route = "blocked" if protected or (proxy and mode != "auto") else ("proxy" if proxy else "direct")
+    reason = "metered_large_download" if protected else ("proxy_disabled" if proxy and mode != "auto" else ("overseas_ai" if proxy else "direct_first"))
+    return {"ok": True, "route": route, "host": host, "reason": reason,
+            "large_file_threshold_bytes": limit, "proxy_required": proxy,
+            "fallback": "proxy" if route == "direct" and not local and mode == "auto" else None,
+            "verified": False, "auto_rebind": False,
+            "note": "规则建议，不代表目标已实测或出口可用；大文件保护默认阈值为100 MiB"}
+
+
+def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
+    """执行受限自治维护动作：设置开关、清理7天事件或读取摘要。"""
+    try:
+        from core.autonomy_core import AutonomyState, EventStore
+        action = str(args.get("action") or "status").strip().lower()
+        state = AutonomyState()
+        if action == "status":
+            return {"ok": True, "action": action, "state": state.load(), "auto_rebind": False}
+        if action == "set_switches":
+            switches = args.get("switches")
+            if not isinstance(switches, dict):
+                return {"ok": False, "code": "invalid_switches"}
+            result = state.set(**{str(k): bool(v) for k, v in switches.items()})
+            return {"ok": True, "action": action, "state": result, "auto_rebind": False}
+        store = EventStore()
+        if action == "cleanup":
+            removed = store.cleanup(retention_days=int(args.get("retention_days", 7)))
+            return {"ok": True, "action": action, "removed": removed}
+        if action == "summary":
+            return {"ok": True, "action": action, "summary": store.summary(retention_days=int(args.get("retention_days", 7)))}
+        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "cleanup", "summary"]}
+    except (ValueError, TypeError, OSError) as exc:
+        return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
+
+
+def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
+    """通过已有本地适配器发送气泡；失败自报，不阻塞其它 MCP 工具。"""
+    text = args.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+        return {"ok": False, "code": "invalid_text", "error": "text 必须为 1–2000 字符的非空文本"}
+    for key, allowed in (("emote", ("happy", "work", "wronged", "wave", "sleepy", "angry")),
+                         ("motion", ("squash", "wiggle", "hop", "random"))):
+        if args.get(key) is not None and args[key] not in allowed:
+            return {"ok": False, "code": "invalid_argument", "error": f"不支持的 {key}"}
+    if args.get("event_id") is not None and not isinstance(args["event_id"], str):
+        return {"ok": False, "code": "invalid_argument", "error": "event_id 必须为字符串"}
+    from core.jingguanjia_notify import notify_jingguanjia
+    sent = notify_jingguanjia(text.strip(), event_id=args.get("event_id"),
+                             emote=args.get("emote"), motion=args.get("motion"))
+    return {"ok": sent, "delivered": sent,
+            "code": "notification_sent" if sent else "notification_unavailable",
+            "recoverable": not sent}
+
+
 # ==============================================================================
 # MCP 协议工具定义
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "autonomy_status",
+        "description": "只读自治状态快照；缺失返回 unknown，不据快照宣称服务存活，不修改绑定",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_autonomy_status
+    },
+    {
+        "name": "pricing_quote",
+        "description": "按供应商、能力和参数查询人民币报价；无核验规则返回待核价，不发起付费调用",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {"type": "string"},
+                "capability": {"type": "string"},
+                "parameters": {"type": "object", "description": "能力参数；不得包含凭据或完整 Prompt"}
+            },
+            "required": ["provider", "capability"]
+        },
+        "handler": tool_pricing_quote
+    },
+    {
+        "name": "proxy_network_route",
+        "description": "按目标域名、大小及计费网络给出 direct/proxy/blocked 建议；不改代理或绑定，不发请求",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "HTTP(S) URL 或域名"},
+                "size_bytes": {"type": "integer", "minimum": 0, "default": 0},
+                "metered": {"type": "boolean", "default": False},
+                "mode": {"type": "string", "enum": ["auto", "direct", "off"], "default": "auto"}
+            },
+            "required": ["target"]
+        },
+        "handler": tool_proxy_network_route
+    },
+    {
+        "name": "autonomy_action",
+        "description": "管理自治开关、清理7天事件或查看摘要；不改绑定、不启动付费任务",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "set_switches", "cleanup", "summary"], "default": "status"},
+                "switches": {"type": "object", "description": "可选开关：enabled、routing_enabled、download_guard_enabled"},
+                "retention_days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 7}
+            }
+        },
+        "handler": tool_autonomy_action
+    },
+    {
+        "name": "notify_jingguanjia",
+        "description": "通过本地鲸管家发送结果气泡；请勿发送凭据、签名 URL 或长堆栈；失败不影响代理服务",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "event_id": {"type": "string", "description": "可选稳定事件 ID，用于接收方去重"},
+                "emote": {"type": "string", "enum": ["happy", "work", "wronged", "wave", "sleepy", "angry"]},
+                "motion": {"type": "string", "enum": ["squash", "wiggle", "hop", "random"]}
+            },
+            "required": ["text"]
+        },
+        "handler": tool_notify_jingguanjia
+    },
     {
         "name": "google_verify_proxy",
         "description": "通过 Google 自己返回的 Country version 验证端口国家；只读，不修改绑定",
