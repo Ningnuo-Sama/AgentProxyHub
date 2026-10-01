@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import Any
+from pathlib import Path
 from .jingguanjia_notify import notify_jingguanjia
 
 
@@ -15,6 +16,8 @@ def notify_all(text: str, *, event_id: str | None = None, emote: str = "work", m
     if os.environ.get("APHUB_HERMES_NOTIFY_ENABLED", "1").lower() not in {"0", "false", "off"}:
         exe = os.environ.get("APHUB_HERMES_EXE", r"D:\Program Files (x86)\hermes\bin\hermes.exe")
         target = os.environ.get("APHUB_HERMES_WEIXIN_TARGET", "weixin")
+        # Hermes owns its own iLink login/config; the vault keeps related material indexed,
+        # while this dispatcher deliberately never passes credential text on the CLI.
         if os.path.exists(exe):
             try:
                 completed = subprocess.run([exe, "send", "--to", target, "--json", text[:2000]],

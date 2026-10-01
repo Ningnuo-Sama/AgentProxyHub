@@ -398,6 +398,40 @@ def tool_get_proxy_command(args: Dict[str, Any]) -> Any:
         "claude_code_ready": f'$env:HTTP_PROXY="http://{listen}:{http_port}"; $env:HTTPS_PROXY="http://{listen}:{http_port}"; claude'
     }
 
+def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
+    """Select a healthy unvetoed candidate and atomically move one environment binding."""
+    profile = str(args.get("profile") or "").strip()
+    country = str(args.get("country") or "").strip().upper()
+    scene = str(args.get("scene") or "general").strip().lower()
+    if not profile:
+        return {"success": False, "code": "profile_required", "bindings_changed": False}
+    try:
+        from core.autonomy_core import AutonomyState, EventStore
+        switches = AutonomyState().load()["switches"]
+        if not switches.get("auto_rebind_enabled"):
+            return {"success": False, "code": "auto_rebind_disabled", "bindings_changed": False}
+        candidates = tool_list_matched_proxies({"scene": scene, "country": country, "min_rating": args.get("min_rating", "B"), "limit": 20})
+        rows = [row for row in candidates.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked")]
+        if not rows:
+            return {"success": False, "code": "no_healthy_candidate", "bindings_changed": False}
+        candidate = rows[0]
+        with _bindings_lock():
+            bindings = get_bindings_data()
+            previous_port = next((p for p, value in bindings.items() if value.get("profile") == profile), None)
+            for port, value in list(bindings.items()):
+                if value.get("profile") == profile:
+                    del bindings[port]
+            bindings[str(candidate["port"])] = {
+                "profile": profile, "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "note": "agent_auto_rebind", "previous_port": previous_port
+            }
+            save_bindings_data(bindings)
+        EventStore().append("binding.auto_rebind", {"profile_hash": __import__("hashlib").sha256(profile.encode()).hexdigest()[:16], "from_port": previous_port, "to_port": candidate["port"], "scene": scene, "country": country}, severity="notice")
+        return {"success": True, "profile": profile, "from_port": previous_port, "to_port": candidate["port"], "candidate": candidate, "bindings_changed": True, "paid_calls": False}
+    except Exception as exc:
+        return {"success": False, "code": "auto_rebind_failed", "error": str(exc)[:200], "bindings_changed": False}
+
+
 def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
     """将环境/Profile 与指定端口绑定，锁定 IP 粘性。端口已属于其他环境时拒绝，不静默抢占。"""
     profile = args.get("profile")
@@ -858,6 +892,23 @@ def tool_usage_log(args: Dict[str, Any]) -> Dict[str, Any]:
     return usage_summary()
 
 
+def tool_vault_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Return redacted vault inventory metadata only; never returns secret bytes."""
+    try:
+        from core.credential_vault import MANIFEST
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        entries = manifest.get("entries") or []
+        by_category: Dict[str, int] = {}
+        for entry in entries:
+            category = str(entry.get("category") or "uncategorized")
+            by_category[category] = by_category.get(category, 0) + 1
+        return {"ok": True, "scope": manifest.get("scope"), "count": len(entries),
+                "by_category": by_category, "secret_values_in_manifest": bool(manifest.get("secret_values_in_manifest")),
+                "read_only": True, "path": str(MANIFEST)}
+    except (OSError, ValueError, TypeError) as exc:
+        return {"ok": False, "code": "vault_unavailable", "error": str(exc)[:160], "read_only": True}
+
+
 def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取已批准的模型路由策略；仅读，不切换客户端或外部模型。"""
     policy_file = os.path.join(CONFIG_DIR, "model_policy.json")
@@ -991,6 +1042,12 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "vault_status",
+        "description": "读取长期凭据金库的脱敏库存统计，不返回任何凭据值",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_vault_status
+    },
     {
         "name": "usage_log",
         "description": "记录或汇总不含密钥和提示词的模型消耗日志",
@@ -1197,6 +1254,12 @@ TOOLS = [
             "required": ["port"]
         },
         "handler": tool_get_proxy_command
+    },
+    {
+        "name": "auto_rebind_profile",
+        "description": "Agent 自动选择健康出口并迁移环境绑定；需显式开启 auto_rebind_enabled，不调用付费服务",
+        "inputSchema": {"type": "object", "properties": {"profile": {"type": "string"}, "country": {"type": "string"}, "scene": {"type": "string"}, "min_rating": {"type": "string"}}, "required": ["profile"]},
+        "handler": tool_auto_rebind_profile
     },
     {
         "name": "bind_profile_proxy",

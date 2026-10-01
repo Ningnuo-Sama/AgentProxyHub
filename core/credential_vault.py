@@ -5,7 +5,6 @@ Git, logs, MCP responses, or the metadata manifest. Originals are not deleted.
 """
 from __future__ import annotations
 
-import base64
 import ctypes
 import hashlib
 import json
@@ -67,6 +66,8 @@ def _category(path: Path) -> str:
         return "kie"
     if any(x in name for x in ("zhipu", "智谱", "glm")):
         return "glm"
+    if any(x in name for x in ("hermes", "wechat", "weixin", "鲸管家")):
+        return "notifications"
     return "uncategorized"
 
 

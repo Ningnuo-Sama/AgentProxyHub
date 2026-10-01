@@ -19,6 +19,24 @@ DEFAULT_HEALTH_URL = "http://127.0.0.1:8766/health"
 DEFAULT_TIMEOUT = 1.0
 
 
+def _vault_token() -> str | None:
+    """Resolve the long-lived local token from the DPAPI vault when configured."""
+    if os.environ.get("JG_NOTIFY_TOKEN"):
+        return os.environ["JG_NOTIFY_TOKEN"]
+    try:
+        from .credential_vault import MANIFEST, read_secret
+        import json
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        for entry in manifest.get("entries", []):
+            if entry.get("category") == "notifications" and "token" in str(entry.get("source_name", "")).lower():
+                raw = read_secret(entry["id"]).decode("utf-8", "replace").strip()
+                if raw:
+                    return raw.splitlines()[0].strip()
+    except (OSError, ValueError, KeyError, UnicodeError):
+        return None
+    return None
+
+
 def _post(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> bool:
     url = os.environ.get("JG_NOTIFY_URL", DEFAULT_URL)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -29,8 +47,8 @@ def _post(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> bool:
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            **({"Authorization": f"Bearer {os.environ['JG_NOTIFY_TOKEN']}"}
-               if os.environ.get("JG_NOTIFY_TOKEN") else {}),
+            **({"Authorization": f"Bearer {_vault_token()}"}
+               if _vault_token() else {}),
         },
     )
     try:
