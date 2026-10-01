@@ -878,7 +878,28 @@ def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
                 result[name] = {"status": "ok", "http_status": response.status, "url": url}
         except Exception as exc:
             result[name] = {"status": "unavailable", "url": url, "error": type(exc).__name__}
-    result["glm"] = {"status": "configured_external_only", "paid_probe": False}
+    glm_env = r"D:\GitHub\GLM-4flash\config\.env"
+    glm_key = ""
+    glm_base = "https://open.bigmodel.cn/api/paas/v4"
+    try:
+        with open(glm_env, "r", encoding="utf-8-sig") as handle:
+            for line in handle:
+                if line.startswith("ZHIPUAI_API_KEY="):
+                    glm_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                elif line.startswith("ZHIPUAI_BASE_URL="):
+                    glm_base = line.split("=", 1)[1].strip().rstrip("/")
+        if glm_key:
+            request = urllib.request.Request(glm_base + "/models", headers={"Authorization": f"Bearer {glm_key}"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                models = {str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict)}
+                result["glm"] = {"status": "ok", "http_status": response.status,
+                                  "model_verified": "glm-5.3-flash" in models,
+                                  "model": "glm-5.3-flash", "paid_probe": False}
+        else:
+            result["glm"] = {"status": "not_configured", "paid_probe": False}
+    except Exception as exc:
+        result["glm"] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
     visual_cfg = r"D:\GitHub\ariadne\tools\ariadne-visual-pro\config.local.json"
     try:
         with open(visual_cfg, "r", encoding="utf-8-sig") as handle:
