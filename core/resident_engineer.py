@@ -12,7 +12,9 @@ import datetime as dt
 import json
 import os
 import socket
+import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -35,7 +37,7 @@ PROMPT_TEMPLATES: dict[str, str] = {
 # Names are the only executable surface exposed to a caller.  Handlers are
 # intentionally data-returning functions; no shell/process/network mutation is
 # part of this MVP.
-ALLOWED_ACTIONS = frozenset({"health_check", "read_state", "record_event"})
+ALLOWED_ACTIONS = frozenset({"health_check", "read_state", "record_event", "recover_mihomo"})
 
 
 def _utc_now() -> str:
@@ -118,6 +120,30 @@ class ResidentEngineer:
         result["ok"] = all(c.get("ok", False) for c in result["components"].values())
         return result
 
+    def recover_mihomo(self, *, runner: str | os.PathLike[str], wait_seconds: float = 12.0,
+                       ports: list[int] | None = None) -> dict[str, Any]:
+        """Safely restart the known mihomo runner and verify fixed local ports."""
+        runner_path = Path(runner)
+        if not runner_path.exists():
+            return {"ok": False, "code": "runner_missing", "runner": str(runner_path), "recoverable": True}
+        before = self.health_check(ports or [21001, 21008, 22002, 39999, 21909])
+        try:
+            subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent),
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as exc:
+            return {"ok": False, "code": "runner_start_failed", "error": str(exc)[:160],
+                    "before": before, "recoverable": True}
+        deadline = time.monotonic() + max(0.5, float(wait_seconds))
+        after = before
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            after = self.health_check(ports or [21001, 21008, 22002, 39999, 21909])
+            if after.get("ok") and all(row.get("open") for row in after.get("ports", [])):
+                break
+        return {"ok": bool(after.get("ok") and all(row.get("open") for row in after.get("ports", []))),
+                "action": "recover_mihomo", "before": before, "after": after,
+                "runner": str(runner_path), "paid_calls": False, "bindings_changed": False}
+
     def prompt(self, template: str = "health_check", **values: Any) -> dict[str, Any]:
         if template not in PROMPT_TEMPLATES:
             return {"ok": False, "code": "unknown_prompt_template", "allowed": sorted(PROMPT_TEMPLATES)}
@@ -138,6 +164,12 @@ class ResidentEngineer:
         try:
             if action == "health_check":
                 result = self.health_check(args.get("ports"), host=str(args.get("host", "127.0.0.1")))
+            elif action == "recover_mihomo":
+                result = self.recover_mihomo(
+                    runner=str(args.get("runner") or ROOT_DIR.parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"),
+                    wait_seconds=float(args.get("wait_seconds", 12)),
+                    ports=args.get("ports") or [21001, 21008, 22002, 39999, 21909],
+                )
             elif action == "read_state":
                 result = self.load_state()
             else:  # record_event

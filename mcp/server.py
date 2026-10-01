@@ -859,6 +859,23 @@ def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "code": "model_policy_unavailable", "error": str(exc)[:160], "recoverable": True}
 
 
+def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect/recover the known local mihomo runner; no rebinding or paid calls."""
+    from core.resident_engineer import ResidentEngineer
+    runner = args.get("runner") or r"D:\Program Files\AgentProxyHub\silent-run.bat"
+    result = ResidentEngineer().dispatch("recover_mihomo", {"runner": runner, "wait_seconds": args.get("wait_seconds", 12), "ports": args.get("ports")})
+    if result.get("ok"):
+        try:
+            from core.jingguanjia_notify import notify_jingguanjia
+            result["jingguanjia_notified"] = notify_jingguanjia(
+                "AgentProxyHub 内核死亡演练：驻场工程师已发现并恢复 mihomo，固定端口已复核。",
+                event_id="agentproxyhub-kernel-recovery-" + str(int(time.time())),
+                emote="happy", motion="hop")
+        except Exception:
+            result["jingguanjia_notified"] = False
+    return result
+
+
 def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取本机已登记渠道的低风险健康状态；不生成、不扣费、不读取明文凭据。"""
     import urllib.request
@@ -964,13 +981,19 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 TOOLS = [
     {
         "name": "model_policy",
-        "description": "读取正式模型路由策略：日常 Gemini 3.8 Flash Tiered，最高事态由当前 Harness 使用 gpt-6.1-sol；只读不自动切换",
+        "description": "读取正式模型路由策略：日常 Gemini 3.8 Flash Tiered，GLM 兜底，最高事态使用 AICost GPT-6.1-SOL；只读不自动切换",
         "inputSchema": {"type": "object", "properties": {}},
         "handler": tool_model_policy
     },
     {
+        "name": "kernel_recovery",
+        "description": "驻场工程师恢复已知 mihomo 内核并复核固定端口；不换绑、不付费",
+        "inputSchema": {"type": "object", "properties": {"runner": {"type": "string"}, "wait_seconds": {"type": "number"}, "ports": {"type": "array", "items": {"type": "integer"}}}},
+        "handler": tool_kernel_recovery
+    },
+    {
         "name": "channel_health",
-        "description": "检查 Gemini、Flow-Tools、OpenViking、鲸管家等本地渠道；外部 Kie/AICost/GLM 仅标记配置状态，不发生成或付费请求",
+        "description": "检查 Gemini、Flow-Tools、OpenViking、鲸管家等本地渠道；外部 Kie/AICost/GLM 仅做只读健康检查，不发生成或付费请求",
         "inputSchema": {"type": "object", "properties": {"channels": {"type": "array", "items": {"type": "string"}}}},
         "handler": tool_channel_health
     },
@@ -980,7 +1003,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["health_check", "read_state", "record_event"], "default": "health_check"},
+                "action": {"type": "string", "enum": ["health_check", "read_state", "record_event", "recover_mihomo"], "default": "health_check"},
                 "args": {"type": "object"},
                 "prompt_template": {"type": "string", "enum": ["health_check", "incident_report", "action_result"]},
                 "values": {"type": "object"}
