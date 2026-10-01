@@ -1,4 +1,4 @@
-﻿# AgentProxyHub —— 取用代理配置的控制面板（WPF 原生窗口，无浏览器、无本地服务）
+# AgentProxyHub —— 取用代理配置的控制面板（WPF 原生窗口，无浏览器、无本地服务）
 # 数据来源：nodes.json（由 gen-report.ps1 生成）+ 内核控制 API（延迟测速）
 # 特性：按地区折叠分组、一环境一端口随取随用、蜂窝订阅刷新后自动同步、诚实标注未探测项
 
@@ -390,35 +390,49 @@ $script:HttpFormats = @('http://')
   <Grid Margin="24">
     <Grid x:Name="ViewCockpit">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <Border Background="#15101F" BorderBrush="#7852AF" BorderThickness="1" Padding="24" CornerRadius="8">
+      <Border Background="#130D17" BorderBrush="#B63A2E" BorderThickness="1" Padding="18" CornerRadius="2">
         <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
           <StackPanel>
-            <TextBlock Text="APH // CORE CONTROL" Foreground="#B39ADB" FontFamily="Consolas" FontSize="14"/>
-            <TextBlock x:Name="CockpitState" Text="状态未知" FontSize="32" FontWeight="SemiBold" Margin="0,10,0,6"/>
+            <TextBlock Text="APH // GATEWAY OBSERVATORY" Foreground="#FF6B35" FontFamily="Consolas" FontSize="13" FontWeight="Bold"/>
+            <TextBlock Text="常态化网关情报 · 人类可读层" Foreground="#D8A28E" FontFamily="Consolas" FontSize="11" Margin="0,5,0,0"/>
+            <TextBlock x:Name="CockpitState" Text="状态未知" FontSize="30" FontWeight="SemiBold" Margin="0,11,0,3"/>
             <TextBlock x:Name="CockpitDetail" Text="检测本项目内核 · 不改变账号绑定" Foreground="#B9AFCA" TextWrapping="Wrap"/>
           </StackPanel>
-          <Button x:Name="BtnCoreToggle" Grid.Column="1" Content="启动内核" MinWidth="144" Height="52" Margin="24,0,0,0" Background="#382451" AutomationProperties.Name="启动或停止本项目内核"/>
+          <StackPanel Grid.Column="1" Margin="22,0,24,0" VerticalAlignment="Center">
+            <TextBlock Text="SYSTEM CLOCK" Foreground="#8F7772" FontFamily="Consolas" FontSize="10"/>
+            <TextBlock x:Name="CockpitClock" Text="--:--:--" Foreground="#FFB347" FontFamily="Consolas" FontSize="24"/>
+            <TextBlock x:Name="FeedModeText" Text="FEED // LIVE" Foreground="#6DFFB3" FontFamily="Consolas" FontSize="10"/>
+          </StackPanel>
+          <Button x:Name="BtnCoreToggle" Grid.Column="2" Content="启动内核" MinWidth="142" Height="54" Background="#64251F" BorderBrush="#FF6B35" BorderThickness="1" AutomationProperties.Name="启动或停止本项目内核"/>
         </Grid>
       </Border>
-      <UniformGrid Grid.Row="1" Columns="2" Margin="0,20,0,20">
-        <Border Background="#141218" BorderBrush="#453251" BorderThickness="1" CornerRadius="8" Padding="24" Margin="0,0,10,0">
-          <StackPanel><TextBlock Text="01 / GOOGLE" Foreground="#B39ADB" FontFamily="Consolas" FontSize="16"/>
-            <TextBlock x:Name="GoogleState" Text="锚定状态未知" FontSize="24" Foreground="#FFBA68" Margin="0,20,0,12"/>
-            <TextBlock x:Name="GoogleDetail" Text="等待读取固定账号出口" TextWrapping="Wrap" Foreground="#B9AFCA"/>
-          </StackPanel>
+      <Grid Grid.Row="1" Margin="0,14,0,14">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="1.35*"/><ColumnDefinition Width="0.85*"/></Grid.ColumnDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <UniformGrid Grid.ColumnSpan="2" Columns="4" Margin="0,0,0,12">
+          <Border Background="#160F18" BorderBrush="#6B2730" BorderThickness="1" Padding="13" Margin="0,0,5,0"><StackPanel><TextBlock Text="01 / GOOGLE" Foreground="#FF6B35" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="GoogleState" Text="锚定状态未知" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock x:Name="GoogleDetail" Text="等待验证" Foreground="#B9AFCA" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#120F18" BorderBrush="#52305E" BorderThickness="1" Padding="13" Margin="5,0,5,0"><StackPanel><TextBlock Text="02 / CLAUDE" Foreground="#CF78FF" FontFamily="Consolas" FontSize="12"/><TextBlock Text="使用出口未登记" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock x:Name="ClaudeDetail" Text="等待网关证据" Foreground="#B9AFCA" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#10141A" BorderBrush="#235A67" BorderThickness="1" Padding="13" Margin="5,0,5,0"><StackPanel><TextBlock Text="03 / FLOW" Foreground="#6DDBFF" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="FlowState" Text="网关待命" FontSize="19" Foreground="#6DDBFF" Margin="0,9,0,3"/><TextBlock x:Name="FlowDetail" Text="实时消息未接入" Foreground="#A9C4CF" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#18130E" BorderBrush="#80511E" BorderThickness="1" Padding="13" Margin="5,0,0,0"><StackPanel><TextBlock Text="04 / MOBILE" Foreground="#FFB347" FontFamily="Consolas" FontSize="12"/><TextBlock Text="告警未接入" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock Text="不伪造送达回执" Foreground="#C0B4A5" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+        </UniformGrid>
+        <Border Grid.Row="1" Grid.Column="0" Background="#0E1117" BorderBrush="#3C5366" BorderThickness="1" Padding="12" Margin="0,0,7,0">
+          <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="LIVE INTELLIGENCE STREAM" Foreground="#6DDBFF" FontFamily="Consolas" FontSize="12" FontWeight="Bold"/><TextBlock x:Name="FeedSummaryText" Text="正在整理网关消息…" Foreground="#78909C" FontSize="11" Margin="0,4,0,0"/></StackPanel><TextBlock Grid.Column="1" x:Name="FeedFilterText" Text="ALL SIGNALS" Foreground="#FF6B35" FontFamily="Consolas" FontSize="10" VerticalAlignment="Center"/></Grid>
+            <ListBox Grid.Row="1" x:Name="MessageFeed" Background="Transparent" BorderThickness="0" Margin="0,8,0,4" Foreground="#E5E9F0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+            <TextBlock Grid.Row="2" x:Name="FeedFooterText" Text="消息已去重 · 原始日志不会直接展示" Foreground="#63717D" FontSize="10" Margin="0,6,0,0"/>
+          </Grid>
         </Border>
-        <Border Background="#141218" BorderBrush="#453251" BorderThickness="1" CornerRadius="8" Padding="24" Margin="10,0,0,0">
-          <StackPanel><TextBlock Text="02 / CLAUDE" Foreground="#B39ADB" FontFamily="Consolas" FontSize="16"/>
-            <TextBlock Text="使用出口未登记" FontSize="24" Foreground="#FFBA68" Margin="0,20,0,12"/>
-            <TextBlock x:Name="ClaudeDetail" Text="候选能力不代表当前出口可用" TextWrapping="Wrap" Foreground="#B9AFCA"/>
-          </StackPanel>
+        <Border Grid.Row="1" Grid.Column="1" Background="#160F18" BorderBrush="#7A3440" BorderThickness="1" Padding="14" Margin="7,0,0,0">
+          <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <StackPanel><TextBlock Text="ENGINEER // DIRECTIVE" Foreground="#FF6B35" FontFamily="Consolas" FontSize="12" FontWeight="Bold"/><TextBlock Text="告诉工程师你想看什么，面板自动调整" Foreground="#C79A8D" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap"/></StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,15,0,10"><TextBlock Text="例如：不显示错误重试；显示最近出视频的日志；恢复默认" Foreground="#8E7774" FontSize="11" TextWrapping="Wrap"/><TextBox x:Name="EngineerInput" Height="76" Margin="0,9,0,8" AcceptsReturn="True" TextWrapping="Wrap"/><Button x:Name="BtnEngineerApply" Content="应用工程师指令" Height="34" Background="#64251F" BorderBrush="#FF6B35" BorderThickness="1"/></StackPanel>
+            <StackPanel Grid.Row="2"><TextBlock x:Name="EngineerStatus" Text="ENGINEER STATUS // 本地规则待命" Foreground="#6DFFB3" FontFamily="Consolas" FontSize="10" TextWrapping="Wrap"/><Button x:Name="BtnGlmDigest" Content="生成一段 GLM 常态汇报（预留）" Margin="0,9,0,0" Height="30" Background="#2B1D3B"/></StackPanel>
+          </Grid>
         </Border>
-      </UniformGrid>
-      <Border Grid.Row="2" Background="#1C1711" BorderBrush="#6C4D2D" BorderThickness="1" CornerRadius="8" Padding="20">
-        <StackPanel><TextBlock Text="03 / 手机告警 · 未接入" Foreground="#FFBA68" FontSize="17"/>
-          <TextBlock Text="未配置通知渠道与送达回执。手机代理连通不等于告警已送达。" Foreground="#C0B4A5" Margin="0,8,0,0" TextWrapping="Wrap"/>
-        </StackPanel>
+      </Grid>
+      <Border Grid.Row="2" Background="#18110E" BorderBrush="#80511E" BorderThickness="1" Padding="12" CornerRadius="2">
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="CockpitTicker" Text="SYSTEM // 正在等待网关事件" Foreground="#FFB347" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"/><TextBlock Text="F9 ENGINEER · CTRL+D DEBUG" Foreground="#8F7772" FontFamily="Consolas" FontSize="10" Grid.Column="1" VerticalAlignment="Center"/></Grid>
       </Border>
     </Grid>
     <Grid x:Name="DebugHost" Visibility="Collapsed">
@@ -706,6 +720,16 @@ $CockpitDetail = $win.FindName('CockpitDetail')
 $GoogleState = $win.FindName('GoogleState')
 $GoogleDetail = $win.FindName('GoogleDetail')
 $ClaudeDetail = $win.FindName('ClaudeDetail')
+$FlowState = $win.FindName('FlowState')
+$FlowDetail = $win.FindName('FlowDetail')
+$CockpitClock = $win.FindName('CockpitClock')
+$CockpitTicker = $win.FindName('CockpitTicker')
+$FeedSummaryText = $win.FindName('FeedSummaryText')
+$MessageFeed = $win.FindName('MessageFeed')
+$EngineerInput = $win.FindName('EngineerInput')
+$BtnEngineerApply = $win.FindName('BtnEngineerApply')
+$EngineerStatus = $win.FindName('EngineerStatus')
+$BtnGlmDigest = $win.FindName('BtnGlmDigest')
 $script:CoreAction = $null
 $script:CoreActionError = ''
 function Set-PanelMode([bool]$debug) {
@@ -714,7 +738,10 @@ function Set-PanelMode([bool]$debug) {
 }
 $win.Add_PreviewKeyDown({
     param($sender, $e)
-    if ($e.Key -eq 'D' -and ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) {
+    if ($e.Key -eq 'F9') {
+        if ($DebugHost.Visibility -eq 'Visible') { $EngineerInput.Focus() } else { $EngineerInput.Focus() }
+        $e.Handled = $true
+    } elseif ($e.Key -eq 'D' -and ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) {
         Set-PanelMode ($DebugHost.Visibility -ne 'Visible'); $e.Handled = $true
     } elseif ($e.Key -eq 'Escape' -and $DebugHost.Visibility -eq 'Visible') {
         Set-PanelMode $false; $e.Handled = $true
@@ -820,6 +847,76 @@ $script:Secret = ''
 $script:ProfilePath = ''
 $script:LastWrite = $null
 $script:ExpandedInit = $false
+$script:EngineerRules = @{ hidden = @(); focus = @(); updatedAt = $null }
+$script:EngineerRulesPath = Get-RunFile 'cockpit_rules.json'
+try {
+    if (Test-Path -LiteralPath $script:EngineerRulesPath) {
+        $savedRules = Get-Content -LiteralPath $script:EngineerRulesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($savedRules.hidden) { $script:EngineerRules.hidden = @($savedRules.hidden) }
+        if ($savedRules.focus) { $script:EngineerRules.focus = @($savedRules.focus) }
+    }
+} catch { }
+$script:MessageSeen = @{}
+$script:LastGatewayLogLength = 0
+$script:GatewayLogPath = Join-Path $Dir 'logs\panel.log'
+
+function Import-GatewayDigest {
+    if (-not (Test-Path -LiteralPath $script:GatewayLogPath)) { return }
+    try {
+        $lines = @(Get-Content -LiteralPath $script:GatewayLogPath -Encoding UTF8 -Tail 30)
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $parts = $line -split '\s+', 4
+            $kind = if ($parts.Count -ge 3) { $parts[2].ToUpperInvariant() } else { 'GATEWAY' }
+            $detail = if ($parts.Count -ge 4) { $parts[3] } else { '网关状态有更新' }
+            $tone = if ($kind -match 'ERROR|FAIL|ALERT') { 'alert' } elseif ($kind -match 'WARN|GUARD|RETRY') { 'warn' } else { 'normal' }
+            Add-CockpitMessage $kind $detail $tone
+        }
+    } catch { }
+}
+
+function Add-CockpitMessage([string]$category, [string]$text, [string]$tone = 'normal') {
+    if (-not $MessageFeed -or [string]::IsNullOrWhiteSpace($text)) { return }
+    $clean = ($text -replace '[\r\n]+', ' ').Trim()
+    if ($clean.Length -gt 180) { $clean = $clean.Substring(0,177) + '...' }
+    $finger = "$category|$clean"
+    if ($script:MessageSeen.ContainsKey($finger)) { return }
+    $script:MessageSeen[$finger] = (Get-Date)
+    if ($script:MessageSeen.Count -gt 200) {
+        $old = $script:MessageSeen.GetEnumerator() | Sort-Object Value | Select-Object -First 50
+        foreach ($x in $old) { $script:MessageSeen.Remove($x.Key) }
+    }
+    foreach ($rule in @($script:EngineerRules.hidden)) {
+        if ($clean -like "*$rule*") { return }
+    }
+    $item = New-Object Windows.Controls.ListBoxItem
+    $item.Content = "[$category] $clean"
+    $feedColor = if ($tone -eq 'warn') { '#FFB347' } elseif ($tone -eq 'alert') { '#FF6B7D' } else { '#D6E4EE' }
+    $item.Foreground = New-GBrush $feedColor
+    $item.Padding = [Windows.Thickness]::new(4,5,4,5)
+    $item.FontFamily = 'Consolas'
+    [void]$MessageFeed.Items.Insert(0, $item)
+    while ($MessageFeed.Items.Count -gt 12) { $MessageFeed.Items.RemoveAt($MessageFeed.Items.Count - 1) }
+    $FeedSummaryText.Text = "已整理 $($MessageFeed.Items.Count) 条 · 原始日志已转译"
+    $CockpitTicker.Text = "$category // $clean"
+}
+
+function Apply-EngineerDirective([string]$directive) {
+    $d = ($directive -replace '[\r\n]+', ' ').Trim()
+    if (-not $d) { return }
+    if ($d -match '不显示|隐藏|屏蔽') {
+        $m = [regex]::Match($d, '(?:不显示|隐藏|屏蔽)(?:掉|这个|这类)?\s*([\p{L}\p{N}_-]{2,24})')
+        if ($m.Success) { $script:EngineerRules.hidden += $m.Groups[1].Value; $EngineerStatus.Text = "ENGINEER // 已隐藏关键词：$($m.Groups[1].Value)" }
+        else { $EngineerStatus.Text = 'ENGINEER // 请说清要隐藏的关键词' }
+    } elseif ($d -match '显示|查看|关注') {
+        if ($d -match '视频|出片|生成') { $script:EngineerRules.focus = @('视频','出片','生成'); $EngineerStatus.Text = 'ENGINEER // 已切换到视频/出片情报视图' }
+        else { $EngineerStatus.Text = 'ENGINEER // 已更新关注主题' }
+    } elseif ($d -match '恢复|默认|清除') {
+        $script:EngineerRules = @{ hidden=@(); focus=@(); updatedAt=(Get-Date) }; $EngineerStatus.Text = 'ENGINEER // 已恢复默认显示规则'
+    } else { $EngineerStatus.Text = 'ENGINEER // 指令已记录，GLM 摘要接口待接入' }
+    try { $script:EngineerRules | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:EngineerRulesPath -Encoding UTF8 } catch { }
+    Add-CockpitMessage 'ENGINEER' $EngineerStatus.Text
+}
 
 function Pump {
     [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
@@ -1895,6 +1992,23 @@ $BtnStartCore.Add_Click({ Start-OwnedCore })
 $BtnStopCore.Add_Click({ Stop-OwnedCore })
 $BtnCoreToggle.Add_Click({ if (Test-Kernel) { Stop-OwnedCore } else { Start-OwnedCore } })
 
+# ---------------- 常态情报与工程师指令（只改显示规则，不改端口绑定）
+$script:CockpitUiTimer = New-Object Windows.Threading.DispatcherTimer
+$script:CockpitUiTimer.Interval = [TimeSpan]::FromSeconds(1)
+$script:CockpitUiTimer.Add_Tick({
+    if ($CockpitClock) { $CockpitClock.Text = (Get-Date -Format 'HH:mm:ss') }
+    Import-GatewayDigest
+    if ($FlowState -and (Test-Kernel)) {
+        $FlowState.Text = '网关在线'
+        $FlowDetail.Text = '本地内核已确认 · 业务日志待接入'
+    }
+})
+$script:CockpitUiTimer.Start()
+Add-CockpitMessage 'SYSTEM' '驾驶舱已上线：正在等待网关摘要' 'normal'
+$BtnEngineerApply.Add_Click({ Apply-EngineerDirective $EngineerInput.Text; $EngineerInput.Clear() })
+$EngineerInput.Add_KeyDown({ param($sender, $e); if ($e.Key -eq 'Enter' -and ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) { Apply-EngineerDirective $EngineerInput.Text; $EngineerInput.Clear(); $e.Handled = $true } })
+$BtnGlmDigest.Add_Click({ $EngineerStatus.Text = 'ENGINEER // GLM 常态汇报接口已预留，当前使用本地可读摘要'; Add-CockpitMessage 'GLM' '常态汇报接口已预留，尚未向外部模型发送日志' 'warn' })
+
 # ---------------- 主按钮：体检一次（唯一的日常操作按钮）----------------
 $BtnHealth.Add_Click({
     if ($script:ActiveView -eq 'Guard') {
@@ -2133,6 +2247,7 @@ try {
     if ($script:CoreLaunchProc) { $script:CoreLaunchProc.Dispose() }
     $script:ShowTimer.Stop()
     $script:GuardTimer.Stop()
+    if ($script:CockpitUiTimer) { $script:CockpitUiTimer.Stop() }
     if ($script:GuardScanning) { Stop-GuardScan }
     $script:Tray.Visible = $false
     $script:Tray.Dispose()
