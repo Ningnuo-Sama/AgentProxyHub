@@ -195,8 +195,8 @@ $script:HttpFormats = @('http://')
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AgentProxyHub · 智能代理与环境调度中枢" Height="780" Width="1240" MinHeight="540" MinWidth="900"
-        WindowStartupLocation="CenterScreen" Background="#131316" Foreground="#E9E9EC"
+        Title="AgentProxyHub · 极简驾驶舱" Height="780" Width="1240" MinHeight="540" MinWidth="900"
+        WindowStartupLocation="CenterScreen" Background="#090B10" Foreground="#F1F4F2"
         FontFamily="Microsoft YaHei UI" FontSize="13" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
   <Window.Resources>
@@ -382,12 +382,46 @@ $script:HttpFormats = @('http://')
     </Style>
     <Style TargetType="ProgressBar">
       <Setter Property="Height" Value="4"/>
-      <Setter Property="Foreground" Value="#4EA1FF"/>
-      <Setter Property="Background" Value="#22222A"/>
+      <Setter Property="Foreground" Value="#B7FF00"/>
+      <Setter Property="Background" Value="#1B2028"/>
       <Setter Property="BorderThickness" Value="0"/>
     </Style>
   </Window.Resources>
-  <Grid Margin="14,12,14,12">
+  <Grid Margin="24">
+    <Grid x:Name="ViewCockpit">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Border Background="#15101F" BorderBrush="#7852AF" BorderThickness="1" Padding="24" CornerRadius="8">
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <StackPanel>
+            <TextBlock Text="APH // CORE CONTROL" Foreground="#B39ADB" FontFamily="Consolas" FontSize="14"/>
+            <TextBlock x:Name="CockpitState" Text="状态未知" FontSize="32" FontWeight="SemiBold" Margin="0,10,0,6"/>
+            <TextBlock x:Name="CockpitDetail" Text="检测本项目内核 · 不改变账号绑定" Foreground="#B9AFCA" TextWrapping="Wrap"/>
+          </StackPanel>
+          <Button x:Name="BtnCoreToggle" Grid.Column="1" Content="启动内核" MinWidth="144" Height="52" Margin="24,0,0,0" Background="#382451" AutomationProperties.Name="启动或停止本项目内核"/>
+        </Grid>
+      </Border>
+      <UniformGrid Grid.Row="1" Columns="2" Margin="0,20,0,20">
+        <Border Background="#141218" BorderBrush="#453251" BorderThickness="1" CornerRadius="8" Padding="24" Margin="0,0,10,0">
+          <StackPanel><TextBlock Text="01 / GOOGLE" Foreground="#B39ADB" FontFamily="Consolas" FontSize="16"/>
+            <TextBlock x:Name="GoogleState" Text="锚定状态未知" FontSize="24" Foreground="#FFBA68" Margin="0,20,0,12"/>
+            <TextBlock x:Name="GoogleDetail" Text="等待读取固定账号出口" TextWrapping="Wrap" Foreground="#B9AFCA"/>
+          </StackPanel>
+        </Border>
+        <Border Background="#141218" BorderBrush="#453251" BorderThickness="1" CornerRadius="8" Padding="24" Margin="10,0,0,0">
+          <StackPanel><TextBlock Text="02 / CLAUDE" Foreground="#B39ADB" FontFamily="Consolas" FontSize="16"/>
+            <TextBlock Text="使用出口未登记" FontSize="24" Foreground="#FFBA68" Margin="0,20,0,12"/>
+            <TextBlock x:Name="ClaudeDetail" Text="候选能力不代表当前出口可用" TextWrapping="Wrap" Foreground="#B9AFCA"/>
+          </StackPanel>
+        </Border>
+      </UniformGrid>
+      <Border Grid.Row="2" Background="#1C1711" BorderBrush="#6C4D2D" BorderThickness="1" CornerRadius="8" Padding="20">
+        <StackPanel><TextBlock Text="03 / 手机告警 · 未接入" Foreground="#FFBA68" FontSize="17"/>
+          <TextBlock Text="未配置通知渠道与送达回执。手机代理连通不等于告警已送达。" Foreground="#C0B4A5" Margin="0,8,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+    <Grid x:Name="DebugHost" Visibility="Collapsed">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
@@ -402,10 +436,13 @@ $script:HttpFormats = @('http://')
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-          <Ellipse x:Name="Dot" Width="9" Height="9" Fill="#7A7A85" VerticalAlignment="Center"/>
+          <Ellipse x:Name="Dot" Width="9" Height="9" Fill="#B7FF00" VerticalAlignment="Center"/>
+          <TextBlock Text="APH // DEBUG OPS" Margin="8,0,10,0" FontFamily="Consolas" FontWeight="Bold" Foreground="#B7FF00" VerticalAlignment="Center"/>
           <TextBlock x:Name="KernelText" Text="正在检测内核…" Margin="8,0,0,0" VerticalAlignment="Center"/>
-          <Button x:Name="BtnHealth" Content="🩺 体检一次" Margin="16,0,0,0" Background="#2C3F63"/>
-          <Button x:Name="BtnMaintain" Content="⚙ 维护" Margin="6,0,0,0"/>
+          <Button x:Name="BtnHealth" Content="[ 自检 ]" Margin="16,0,0,0" Background="#283A1A"/>
+          <Button x:Name="BtnStartCore" Content="[ 启动 ]" Margin="6,0,0,0" Background="#5B3A12"/>
+          <Button x:Name="BtnStopCore" Content="[ 停止 ]" Margin="6,0,0,0" Background="#4A1D25"/>
+          <Button x:Name="BtnMaintain" Content="[ 调试面板 ]" Margin="6,0,0,0"/>
           <TextBlock Text="场景靶场" Opacity="0.65" VerticalAlignment="Center" Margin="12,0,6,0"/>
           <ComboBox x:Name="CmbScene" Width="185" VerticalAlignment="Center"/>
           <Button x:Name="BtnCopyScenePool" Content="⚡ 复制场景池" Margin="8,0,0,0" Background="#1B432C"/>
@@ -451,7 +488,7 @@ $script:HttpFormats = @('http://')
             <TextBlock Text="(HTTP/SOCKS5混合 · 125节点自动选优 · 坏了秒切 · 国内直连)" Opacity="0.75" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
           </StackPanel>
           <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-            <TextBlock x:Name="PhoneStatusText" Text="✅ 手机(MI 8 Lite)已就绪" FontSize="11" Foreground="#5FD08A" Margin="0,0,10,0" VerticalAlignment="Center"/>
+            <TextBlock x:Name="PhoneStatusText" Text="手机状态未验证" FontSize="11" Foreground="#FFBA68" Margin="0,0,10,0" VerticalAlignment="Center"/>
             <Button x:Name="BtnCopyPhoneProxy" Content="复制代理地址" Background="#203E61" Padding="10,4" Margin="4,0,0,0"/>
             <Button x:Name="BtnPhoneCmd" Content="挂载命令" Background="#283547" Padding="10,4" Margin="4,0,0,0"/>
           </StackPanel>
@@ -626,6 +663,7 @@ $script:HttpFormats = @('http://')
 
       <TextBlock Grid.Row="4" x:Name="GuardStatusText" Margin="4,8,0,0" Opacity="0.7" TextWrapping="Wrap"/>
     </Grid>
+    </Grid>
   </Grid>
 </Window>
 '@
@@ -660,6 +698,28 @@ $win.Add_SourceInitialized($applyDarkTitle)
 $win.Add_Loaded($applyDarkTitle)
 $win.Add_Activated($applyDarkTitle)
 
+$ViewCockpit = $win.FindName('ViewCockpit')
+$DebugHost = $win.FindName('DebugHost')
+$BtnCoreToggle = $win.FindName('BtnCoreToggle')
+$CockpitState = $win.FindName('CockpitState')
+$CockpitDetail = $win.FindName('CockpitDetail')
+$GoogleState = $win.FindName('GoogleState')
+$GoogleDetail = $win.FindName('GoogleDetail')
+$ClaudeDetail = $win.FindName('ClaudeDetail')
+$script:CoreAction = $null
+$script:CoreActionError = ''
+function Set-PanelMode([bool]$debug) {
+    $DebugHost.Visibility = if ($debug) { 'Visible' } else { 'Collapsed' }
+    $ViewCockpit.Visibility = if ($debug) { 'Collapsed' } else { 'Visible' }
+}
+$win.Add_PreviewKeyDown({
+    param($sender, $e)
+    if ($e.Key -eq 'D' -and ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) {
+        Set-PanelMode ($DebugHost.Visibility -ne 'Visible'); $e.Handled = $true
+    } elseif ($e.Key -eq 'Escape' -and $DebugHost.Visibility -eq 'Visible') {
+        Set-PanelMode $false; $e.Handled = $true
+    }
+})
 $Dot         = $win.FindName('Dot')
 $KernelText  = $win.FindName('KernelText')
 $StatusText  = $win.FindName('StatusText')
@@ -668,6 +728,8 @@ $Groups      = $win.FindName('Groups')
 $Scroll      = $win.FindName('Scroll')
 $BtnHealth   = $win.FindName('BtnHealth')
 $BtnMaintain = $win.FindName('BtnMaintain')
+$BtnStartCore = $win.FindName('BtnStartCore')
+$BtnStopCore = $win.FindName('BtnStopCore')
 $CmbScene    = $win.FindName('CmbScene')
 $BtnCopyScenePool = $win.FindName('BtnCopyScenePool')
 $BtnExpand   = $win.FindName('BtnExpand')
@@ -700,6 +762,11 @@ $openPanel = {
     Write-PanelEvent 'shown'
 }
 $openItem.Add_Click($openPanel)
+$debugItem = $trayMenu.Items.Insert(1, (New-Object Windows.Forms.ToolStripMenuItem('调试面板（Ctrl+D）')))
+# Insert returns void; locate the inserted menu item explicitly.
+$trayMenu.Items[1].Add_Click({ & $openPanel; Set-PanelMode $true })
+$homeItem = $trayMenu.Items.Insert(2, (New-Object Windows.Forms.ToolStripMenuItem('返回驾驶舱')))
+$trayMenu.Items[2].Add_Click({ & $openPanel; Set-PanelMode $false })
 $script:Tray.Add_MouseClick({
     param($sender, $e)
     if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { & $openPanel }
@@ -779,8 +846,14 @@ function Get-ProfileInfo {
     return @{ Path = $p; Write = (Get-Item -LiteralPath $p).LastWriteTime }
 }
 
+function Get-OwnedCoreProcesses {
+    $paths = @((Join-Path $Dir 'bin\mihomo.exe'), (Join-Path $Dir 'mihomo.exe'))
+    @(Get-Process mihomo -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and ($paths -contains $_.Path) } catch { $false }
+    })
+}
 function Test-Kernel {
-    return [bool](Get-Process mihomo -ErrorAction SilentlyContinue)
+    return (@(Get-OwnedCoreProcesses).Count -gt 0)
 }
 
 function Invoke-Script([string]$file, [string[]]$extra = @()) {
@@ -1215,6 +1288,21 @@ function Update-KernelUi {
         $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#E08A8A'))
         $KernelText.Text = '内核未运行 · 点「启动内核」'
     }
+    if ($CockpitState) {
+        $busy = [bool]$script:CoreAction
+        $CockpitState.Text = if ($busy) { if ($script:CoreAction -eq 'start') { '正在启动' } else { '正在停止' } } elseif ($run) { '内核运行中' } else { '内核已停止' }
+        $CockpitState.Foreground = if ($busy) { '#FFBA68' } elseif ($run) { '#B7FF00' } else { '#B9AFCA' }
+        $BtnCoreToggle.Content = if ($busy) { '处理中…' } elseif ($run) { '停止内核' } else { '启动内核' }
+        $BtnCoreToggle.IsEnabled = -not $busy
+        $BtnStartCore.IsEnabled = (-not $busy -and -not $run)
+        $BtnStopCore.IsEnabled = (-not $busy -and $run)
+        $CockpitDetail.Text = if ($script:CoreActionError) { $script:CoreActionError } elseif ($run) { '本项目进程已确认 · 业务连通需探测 · 绑定保持不变' } else { '固定端口与账号绑定保持不变 · 关闭面板不停止内核' }
+        $bindings = @(Get-BindingRows)
+        $GoogleState.Text = if ($bindings.Count) { "$($bindings.Count) 个账号锚定 · 待验证" } else { '锚定状态未知' }
+        $GoogleDetail.Text = '仅读取 Antigravity 固定绑定；未执行实时业务验证。'
+        $candidates = @($script:Nodes | Where-Object { $_.claudeSupported -eq $true }).Count
+        $ClaudeDetail.Text = "快照候选 $candidates 个 · 不代表当前使用出口或实时可用。"
+    }
     return $run
 }
 
@@ -1292,9 +1380,10 @@ function Sync-FromHoneycomb {
         } catch {
             $StatusText.Text = "热重载失败（将尝试重启内核）：$($_.Exception.Message)"
             Pump
-            Get-Process mihomo -ErrorAction SilentlyContinue | Stop-Process -Force
-            Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $Dir 'silent-start.vbs')`"" -WindowStyle Hidden
-            Start-Sleep -Seconds 4
+            # Do not force-stop/restart from a failed hot reload; preserve operator control.
+            $script:CoreActionError = '热重载失败，请在驾驶舱确认重启；现有内核未停止。'
+            [void](Update-KernelUi)
+            return
         }
     }
     [void](Full-Reload)
@@ -1628,6 +1717,7 @@ function Stop-GuardScan {
 }
 
 function Switch-View([string]$v) {
+    Set-PanelMode $true
     $isGuard = ($v -eq 'Guard')
     $script:ActiveView = if ($isGuard) { 'Guard' } else { 'Export' }
     $ViewGuard.Visibility  = if ($isGuard) { 'Visible' } else { 'Collapsed' }
@@ -1749,6 +1839,62 @@ $script:GuardTimer.Add_Tick({
 $script:GuardTimer.Start()
 
 # ---------------- 事件绑定 ----------------
+# ---------------- EVA 驾驶舱主控：启动/停止 ----------------
+function Start-OwnedCore {
+    if ($script:CoreAction -or (Test-Kernel)) { return }
+    $script:CoreActionError = ''
+    try {
+        $exe = Join-Path $Dir 'bin\mihomo.exe'
+        if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $Dir 'mihomo.exe' }
+        $cfg = Get-RunFile 'config.yaml'
+        if (-not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $cfg)) { throw '缺少本项目内核或配置，未启动。' }
+        # Direct owned executable launch avoids the legacy launcher global-name check.
+        $script:CoreLaunchProc = Start-Process -FilePath $exe -ArgumentList @('-d', "`"$Dir`"", '-f', "`"$cfg`"") -WorkingDirectory $Dir -WindowStyle Hidden -PassThru
+        $script:CoreAction = 'start'
+        $script:CoreActionStarted = Get-Date
+        $script:CoreControlTimer.Start()
+    } catch { $script:CoreActionError = "启动失败：$($_.Exception.Message)" }
+    [void](Update-KernelUi)
+}
+function Stop-OwnedCore {
+    if ($script:CoreAction) { return }
+    $owned = @(Get-OwnedCoreProcesses)
+    if (-not $owned.Count) { [void](Update-KernelUi); return }
+    $confirm = [Windows.MessageBox]::Show('仅停止本项目路径的内核；21001-21080、22001-22045、39999 消费者会断网。其他 mihomo 不受影响。继续？', '停止本项目内核', 'YesNo', 'Warning')
+    if ($confirm -ne 'Yes') { return }
+    $script:CoreActionError = ''
+    try {
+        foreach ($p in $owned) {
+            # Recheck path immediately before killing the process object (not a bare recycled PID).
+            if (@((Join-Path $Dir 'bin\mihomo.exe'), (Join-Path $Dir 'mihomo.exe')) -contains $p.Path) { $p.Kill() }
+        }
+        $script:CoreAction = 'stop'
+        $script:CoreActionStarted = Get-Date
+        $script:CoreControlTimer.Start()
+    } catch { $script:CoreActionError = "停止失败：$($_.Exception.Message)" }
+    [void](Update-KernelUi)
+}
+$script:CoreControlTimer = New-Object Windows.Threading.DispatcherTimer
+$script:CoreControlTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+$script:CoreControlTimer.Add_Tick({
+    try {
+        $run = Test-Kernel
+        $elapsed = ((Get-Date) - $script:CoreActionStarted).TotalSeconds
+        $finished = if ($script:CoreAction -eq 'start') { ($elapsed -ge 2 -and $run) -or ($script:CoreLaunchProc -and $script:CoreLaunchProc.HasExited) } else { -not $run }
+        if ($finished -or $elapsed -ge 12) {
+            if (($script:CoreAction -eq 'start' -and -not $run) -or ($script:CoreAction -eq 'stop' -and $run)) { $script:CoreActionError = '操作未确认成功，请查看调试日志；未触碰其他内核。' }
+            $script:CoreAction = $null
+            $script:CoreControlTimer.Stop()
+            $script:Lat = @{}
+            if ($script:CoreLaunchProc) { $script:CoreLaunchProc.Dispose(); $script:CoreLaunchProc = $null }
+        }
+        [void](Update-KernelUi)
+    } catch { $script:CoreActionError = $_.Exception.Message; $script:CoreAction = $null; $script:CoreControlTimer.Stop(); [void](Update-KernelUi) }
+})
+$BtnStartCore.Add_Click({ Start-OwnedCore })
+$BtnStopCore.Add_Click({ Stop-OwnedCore })
+$BtnCoreToggle.Add_Click({ if (Test-Kernel) { Stop-OwnedCore } else { Start-OwnedCore } })
+
 # ---------------- 主按钮：体检一次（唯一的日常操作按钮）----------------
 $BtnHealth.Add_Click({
     if ($script:ActiveView -eq 'Guard') {
@@ -1763,22 +1909,9 @@ $BtnHealth.Add_Click({
 # ---------------- 维护菜单（冷门操作全部收编于此）----------------
 $script:MaintMenu = New-Object Windows.Forms.ContextMenuStrip
 $miStart = $script:MaintMenu.Items.Add('▶ 启动内核')
-$miStart.Add_Click({
-    $StatusText.Text = '正在启动内核…'
-    Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $Dir 'silent-start.vbs')`"" -WindowStyle Hidden
-    Start-Sleep -Seconds 4
-    [void](Update-KernelUi)
-    [void](Full-Reload)
-})
+$miStart.Add_Click({ Start-OwnedCore })
 $miStop = $script:MaintMenu.Items.Add('■ 停止内核（浏览器环境会断代理）')
-$miStop.Add_Click({
-    Get-Process mihomo -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 1
-    $script:Lat = @{}
-    [void](Update-KernelUi)
-    Render
-    $StatusText.Text = '内核已停止。所有指向 21001-21080 的浏览器环境会立即失去代理。'
-})
+$miStop.Add_Click({ Stop-OwnedCore })
 [void]$script:MaintMenu.Items.Add('-')
 $miSpeed = $script:MaintMenu.Items.Add('⏱ 仅重新测速（不重新体检）')
 $miSpeed.Add_Click({
@@ -1994,6 +2127,10 @@ try {
     [void]$app.Run($win)
 } finally {
     $script:Timer.Stop()
+    $script:CoreControlTimer.Stop()
+    $script:ReloadTimer.Stop()
+    $script:LatTimer.Stop()
+    if ($script:CoreLaunchProc) { $script:CoreLaunchProc.Dispose() }
     $script:ShowTimer.Stop()
     $script:GuardTimer.Stop()
     if ($script:GuardScanning) { Stop-GuardScan }
