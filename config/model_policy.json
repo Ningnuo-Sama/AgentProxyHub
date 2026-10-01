@@ -8,8 +8,10 @@
   },
   "highest_urgency": {
     "model": "gpt-6.1-sol",
-    "provider": "harness",
-    "purpose": "最高事态；由当前 Agent/Harness 处理，不由本地 Gemini 网关冒充"
+    "provider": "aicost",
+    "base_url": "https://www.aicost.me",
+    "credential_ref": "aicost_gpt6_1_sol",
+    "purpose": "最高事态；通过 AICost 调用 GPT-6.1-SOL"
   },
   "fallback": {
     "model": "gemini-3.8-flash-low",
@@ -24,6 +26,7 @@
   "evidence": {
     "gemini_model_list_verified": true,
     "gemini_tiered_model": "gemini-3.8-flash-tiered",
-    "highest_urgency_runtime_managed": true
+    "highest_urgency_runtime_managed": true,
+    "aicost_gpt6_1_sol_model_verified": true
   }
 }
