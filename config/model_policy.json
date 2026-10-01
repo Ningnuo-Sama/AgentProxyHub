@@ -14,9 +14,11 @@
     "purpose": "最高事态；通过 AICost 调用 GPT-6.1-SOL"
   },
   "fallback": {
-    "model": "gemini-3.8-flash-low",
-    "provider": "antigravity",
-    "purpose": "日常模型不可用时的本地降级"
+    "model": "glm-5.3-flash",
+    "provider": "zhipu",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "credential_ref": "zhipu_glm_flash",
+    "purpose": "Gemini 日常模型不可用时的低成本兜底"
   },
   "glm": {
     "model": "glm-5.3-flash",
