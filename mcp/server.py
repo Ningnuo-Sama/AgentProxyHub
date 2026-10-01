@@ -28,6 +28,8 @@ FALLBACK_NODES = "D:\\Program Files\\FengWoBridge\\nodes.json"
 # 跨进程账本锁：MCP 可能被多个 Agent 客户端各拉一个实例（人手一个），
 # 加上 CloakMulti GUI 共写 bindings.json，读-改-写必须整段持锁防丢更新。
 BINDINGS_LOCK = os.path.join(DATA_DIR, "bindings.lock")
+UPSTREAMS_FILE = os.path.join(DATA_DIR, "upstreams.json")
+UPSTREAMS_LOCK = os.path.join(DATA_DIR, "upstreams.lock")
 
 # Antigravity Tools 的账号粘性锚定（只读）。注意与上面的环境锁定账本是两码事：
 # bindings.json 记「指纹浏览器环境 → 端口」，这里记「Google 账号 → 出口」，
@@ -40,6 +42,13 @@ EXIT_PORT_MIN, EXIT_PORT_MAX = 21001, 22045
 
 import contextlib
 
+try:
+    from core.upstream_fetcher import load_sources, refresh_sources
+except ImportError:
+    # 兼容直接以 python mcp/server.py 启动
+    sys.path.insert(0, ROOT_DIR)
+    from core.upstream_fetcher import load_sources, refresh_sources
+
 @contextlib.contextmanager
 def _bindings_lock():
     import msvcrt
@@ -51,6 +60,37 @@ def _bindings_lock():
         finally:
             lf.seek(0)
             msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+
+@contextlib.contextmanager
+def _upstreams_lock():
+    import msvcrt
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(UPSTREAMS_LOCK, "a+b") as lf:
+        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lf.seek(0)
+            msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+
+def get_upstreams_data() -> Dict[str, Any]:
+    """读取上游机场与订阅源登记账本。"""
+    if not os.path.exists(UPSTREAMS_FILE):
+        return {"version": "1.0.0", "updated_at": 0, "sources": []}
+    try:
+        with open(UPSTREAMS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"version": "1.0.0", "updated_at": 0, "sources": []}
+
+def save_upstreams_data(data: Dict[str, Any]) -> None:
+    """原子保存上游源配置，自动更新时间戳。"""
+    data["updated_at"] = int(time.time())
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = UPSTREAMS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, UPSTREAMS_FILE)
 
 def get_nodes_data() -> Dict[str, Any]:
     """读取测绘节点数据。
@@ -511,11 +551,130 @@ def tool_audit_confidence(args: Dict[str, Any]) -> Any:
     }
 
 
+def tool_set_upstream_credential(args: Dict[str, Any]) -> Dict[str, Any]:
+    """保存或更新上游机场/订阅源的鉴权令牌、接口地址或订阅 URL。"""
+    provider_id = (args.get("provider_id") or "").strip()
+    if not provider_id:
+        return {"ok": False, "error": "provider_id 不能为空 (例如: provider_a, provider_b, custom_airport)"}
+
+    name = (args.get("name") or provider_id).strip()
+    upstream_type = (args.get("type") or "api_token").strip()
+    url = (args.get("url") or "").strip()
+    token = (args.get("token") or "").strip()
+    account = (args.get("account") or "").strip()
+    extra = args.get("extra") or {}
+
+    with _upstreams_lock():
+        data = get_upstreams_data()
+        sources = data.setdefault("sources", [])
+
+        target = None
+        for s in sources:
+            if s.get("id") == provider_id:
+                target = s
+                break
+
+        if not target:
+            target = {"id": provider_id}
+            sources.append(target)
+
+        target.update({
+            "name": name,
+            "type": upstream_type,
+            "url": url,
+            "token": token,
+            "account": account,
+            "extra": extra,
+            "updated_at": int(time.time()),
+            "status": "active"
+        })
+        save_upstreams_data(data)
+
+    masked_tok = (token[:8] + "..." + token[-6:]) if len(token) > 16 else ("***" if token else "")
+    return {
+        "ok": True,
+        "message": f"成功保存上游源 [{name}] 的接入凭据",
+        "provider_id": provider_id,
+        "type": upstream_type,
+        "url": url,
+        "account": account,
+        "masked_token": masked_tok,
+        "total_sources": len(sources)
+    }
+
+
+def tool_refresh_upstream_nodes(args: Dict[str, Any]) -> Dict[str, Any]:
+    """刷新上游节点快照；失败时保留上一份有效快照，不改绑定端口。"""
+    wanted = set(args.get("provider_ids") or [])
+    sources = [s for s in load_sources() if not wanted or s.get("id") in wanted]
+    return refresh_sources(sources, dry_run=bool(args.get("dry_run", False)))
+
+
+def tool_get_upstream_sources(args: Dict[str, Any]) -> Dict[str, Any]:
+    """读取已登记的所有上游机场与订阅源清单及状态。"""
+    include_secret = bool(args.get("include_secret", False))
+    data = get_upstreams_data()
+    sources_out = []
+    for s in data.get("sources", []):
+        item = dict(s)
+        tok = item.get("token", "")
+        if not include_secret:
+            item["token"] = (tok[:8] + "..." + tok[-6:]) if len(tok) > 16 else ("***" if tok else "")
+        sources_out.append(item)
+    return {
+        "ok": True,
+        "updated_at": data.get("updated_at", 0),
+        "total": len(sources_out),
+        "sources": sources_out
+    }
+
+
 # ==============================================================================
 # MCP 协议工具定义
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "refresh_upstream_nodes",
+        "description": "拉取已登记上游并原子更新节点快照；失败保留上一份有效快照，不修改账号或端口绑定",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider_ids": {"type": "array", "items": {"type": "string"}},
+                "dry_run": {"type": "boolean", "default": False}
+            }
+        },
+        "handler": tool_refresh_upstream_nodes
+    },
+    {
+        "name": "set_upstream_credential",
+        "description": "登记或更新上游机场凭据（如网页端抓取的 API Token、订阅直链或本地 Profile 路径），供 AgentProxyHub 自动拉取节点融入大一统池",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string", "description": "上游唯一标识 (如 provider_a, provider_b, custom_airport)"},
+                "name": {"type": "string", "description": "友好展示名称 (如 专线源 A, 星辰专线)"},
+                "type": {"type": "string", "description": "源类型: api_token, subscription_url, profile_path", "default": "api_token"},
+                "url": {"type": "string", "description": "API 基地址 (如 https://47.243.129.223:1818) 或订阅链接"},
+                "token": {"type": "string", "description": "Bearer Token、JWT 或专属订阅 Token"},
+                "account": {"type": "string", "description": "绑定邮箱或账号标识"},
+                "extra": {"type": "object", "description": "额外元数据或参数配置"}
+            },
+            "required": ["provider_id"]
+        },
+        "handler": tool_set_upstream_credential
+    },
+    {
+        "name": "get_upstream_sources",
+        "description": "读取当前已登记的所有上游机场及订阅源配置、鉴权类型与同步状态",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_secret": {"type": "boolean", "description": "是否返回完整明文 Token（默认 false，做脱敏遮蔽）", "default": False}
+            }
+        },
+        "handler": tool_get_upstream_sources
+    },
     {
         "name": "list_scenes",
         "description": "列出 AgentProxyHub 当前已配置的所有场景靶场 (如 反重力/Gemini, Claude专属, ChatGPT/OpenAI, Facebook社媒 等)",
