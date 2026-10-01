@@ -2059,6 +2059,35 @@ $miSocks = $script:MaintMenu.Items.Add('📋 复制全部 SOCKS5')
 $miSocks.Add_Click({ Invoke-BatchExport 'socks5://' 'SOCKS5' })
 $miHttp = $script:MaintMenu.Items.Add('📋 复制全部 HTTP')
 $miHttp.Add_Click({ Invoke-BatchExport 'http://' 'HTTP' })
+$miEngineer = $script:MaintMenu.Items.Add('驻场工程师只读巡检')
+$miEngineer.Add_Click({
+    try {
+        $old = Get-Location
+        Set-Location $Dir
+        $out = (& python.exe -B -m core.control_cli engineer 2>&1 | Out-String).Trim()
+        Set-Location $old
+        if (-not $out) { $out = '工程师巡检未返回结果' }
+        [System.Windows.MessageBox]::Show($out, 'AgentProxyHub · 驻场工程师', 'OK', 'Information') | Out-Null
+        Write-PanelEvent 'resident-engineer' 'read-only health check requested'
+    } catch {
+        try { Set-Location $old } catch { }
+        [System.Windows.MessageBox]::Show("驻场工程师巡检失败：$($_.Exception.Message)", 'AgentProxyHub', 'OK', 'Warning') | Out-Null
+    }
+})
+$miAutonomy = $script:MaintMenu.Items.Add('自治调度状态（只读）')
+$miAutonomy.Add_Click({
+    $stateFile = Join-Path $Dir 'data\autonomy_state.json'
+    try {
+        if (Test-Path -LiteralPath $stateFile) {
+            $s = Get-Content -LiteralPath $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $msg = "enabled=$($s.switches.enabled)`nrouting=$($s.switches.routing_enabled)`ndownload_guard=$($s.switches.download_guard_enabled)"
+        } else { $msg = '自治状态快照不存在（默认未启用）' }
+        [System.Windows.MessageBox]::Show($msg, 'AgentProxyHub · 自治状态', 'OK', 'Information') | Out-Null
+        Write-PanelEvent 'autonomy-status' 'read-only state requested'
+    } catch {
+        [System.Windows.MessageBox]::Show("自治状态读取失败：$($_.Exception.Message)", 'AgentProxyHub', 'OK', 'Warning') | Out-Null
+    }
+})
 $BtnMaintain.Add_Click({
     $script:MaintMenu.Show([Windows.Forms.Cursor]::Position)
 })

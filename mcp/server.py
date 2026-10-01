@@ -784,29 +784,83 @@ def tool_proxy_network_route(args: Dict[str, Any]) -> Dict[str, Any]:
             "note": "规则建议，不代表目标已实测或出口可用；大文件保护默认阈值为100 MiB"}
 
 
+_RESIDENT_SCHEDULER = None
+
+
+def _get_resident_scheduler():
+    global _RESIDENT_SCHEDULER
+    if _RESIDENT_SCHEDULER is None:
+        from core.autonomy_core import AutonomyState, EventStore
+        from core.jingguanjia_notify import notify_jingguanjia
+        from core.resident_scheduler import ResidentScheduler
+        state = AutonomyState()
+        _RESIDENT_SCHEDULER = ResidentScheduler(
+            state=state,
+            events=EventStore(),
+            health_check=lambda: {"status": "ok", "source": "local_snapshot",
+                                  "confidence_state": os.path.exists(CONFIDENCE_STATE_FILE)},
+            notifier=notify_jingguanjia,
+            interval_seconds=float(os.environ.get("APHUB_RESIDENT_INTERVAL", "300")),
+        )
+    return _RESIDENT_SCHEDULER
+
+
 def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
-    """执行受限自治维护动作：设置开关、清理7天事件或读取摘要。"""
+    """执行受限自治维护动作：开关、启动/停止、清理事件或查看摘要。"""
     try:
         from core.autonomy_core import AutonomyState, EventStore
         action = str(args.get("action") or "status").strip().lower()
         state = AutonomyState()
+        scheduler_actions = {"start", "stop", "scheduler_status", "run_once"}
+        if action in scheduler_actions:
+            scheduler = _get_resident_scheduler()
+            if action == "start":
+                result = scheduler.start()
+            elif action == "stop":
+                result = scheduler.stop()
+            elif action == "run_once":
+                result = scheduler.run_once(notify=bool(args.get("notify", True)))
+            else:
+                result = scheduler.status()
+            return {"ok": True, "action": action, "scheduler": result, "auto_rebind": False,
+                    "paid_calls": False, "bindings_changed": False}
         if action == "status":
-            return {"ok": True, "action": action, "state": state.load(), "auto_rebind": False}
+            return {"ok": True, "action": action, "state": state.load(),
+                    "scheduler": _get_resident_scheduler().status(), "auto_rebind": False}
         if action == "set_switches":
             switches = args.get("switches")
             if not isinstance(switches, dict):
                 return {"ok": False, "code": "invalid_switches"}
             result = state.set(**{str(k): bool(v) for k, v in switches.items()})
-            return {"ok": True, "action": action, "state": result, "auto_rebind": False}
+            if not result["switches"].get("enabled"):
+                _get_resident_scheduler().stop()
+            return {"ok": True, "action": action, "state": result,
+                    "scheduler": _get_resident_scheduler().status(), "auto_rebind": False}
         store = EventStore()
         if action == "cleanup":
             removed = store.cleanup(retention_days=int(args.get("retention_days", 7)))
             return {"ok": True, "action": action, "removed": removed}
         if action == "summary":
             return {"ok": True, "action": action, "summary": store.summary(retention_days=int(args.get("retention_days", 7)))}
-        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "cleanup", "summary"]}
+        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "cleanup", "summary"]}
     except (ValueError, TypeError, OSError) as exc:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
+
+
+def tool_resident_engineer(args: Dict[str, Any]) -> Dict[str, Any]:
+    """驻场工程师本地白名单动作与提示词模板；不调用付费模型。"""
+    try:
+        from core.resident_engineer import ResidentEngineer
+        engineer = ResidentEngineer()
+        if args.get("prompt_template") is not None:
+            return engineer.prompt(str(args.get("prompt_template")), **(args.get("values") or {}))
+        action = str(args.get("action") or "health_check")
+        result = engineer.dispatch(action, args.get("args") or {})
+        result["paid_calls"] = False
+        result["bindings_changed"] = False
+        return result
+    except (TypeError, ValueError, OSError) as exc:
+        return {"ok": False, "code": "resident_engineer_failed", "error": str(exc)[:200], "recoverable": True}
 
 
 def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -833,6 +887,20 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "resident_engineer",
+        "description": "驻场工程师本地只读检查、状态读取和事件记录；不调用付费模型、不改绑定",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["health_check", "read_state", "record_event"], "default": "health_check"},
+                "args": {"type": "object"},
+                "prompt_template": {"type": "string", "enum": ["health_check", "incident_report", "action_result"]},
+                "values": {"type": "object"}
+            }
+        },
+        "handler": tool_resident_engineer
+    },
     {
         "name": "autonomy_status",
         "description": "只读自治状态快照；缺失返回 unknown，不据快照宣称服务存活，不修改绑定",
@@ -874,7 +942,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "set_switches", "cleanup", "summary"], "default": "status"},
+                "action": {"type": "string", "enum": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "cleanup", "summary"], "default": "status"},
                 "switches": {"type": "object", "description": "可选开关：enabled、routing_enabled、download_guard_enabled"},
                 "retention_days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 7}
             }

@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Minimal local resident-engineer backend.
+
+This module is deliberately dependency-free and offline-first.  It provides a
+small contract for a future UI/agent bridge without calling paid providers,
+changing proxy bindings, or allowing arbitrary commands.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import socket
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
+STATE_FILE = DATA_DIR / "resident_engineer_state.json"
+
+SYSTEM_PROMPT = """你是 AgentProxyHub 的本地驻场网络工程师。
+你的职责是检查本地代理出口、解释故障并给出可审计的安全建议。
+铁律：不调用付费外部服务；不跨区换绑；不修改账号或端口绑定；
+不执行白名单之外的动作；任何失败都要返回结构化错误且不得阻塞代理服务。
+""".strip()
+
+PROMPT_TEMPLATES: dict[str, str] = {
+    "health_check": "请检查本地 AgentProxyHub 状态：节点文件、状态落盘和指定端口监听情况。只读，不修改配置。",
+    "incident_report": "请根据以下本地检查结果生成简短故障报告，列出证据、影响、建议和未验证项：\n{details}",
+    "action_result": "动作 {action} 已完成。结果：{result}",
+}
+
+# Names are the only executable surface exposed to a caller.  Handlers are
+# intentionally data-returning functions; no shell/process/network mutation is
+# part of this MVP.
+ALLOWED_ACTIONS = frozenset({"health_check", "read_state", "record_event"})
+
+
+def _utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def _atomic_write(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+class ResidentEngineer:
+    """Offline-safe stateful facade for the resident engineer."""
+
+    def __init__(self, state_file: str | os.PathLike[str] = STATE_FILE,
+                 *, nodes_file: str | os.PathLike[str] | None = None):
+        self.state_file = Path(state_file)
+        self.nodes_file = Path(nodes_file or DATA_DIR / "nodes.json")
+
+    def load_state(self) -> dict[str, Any]:
+        default = {"version": 1, "updated_at": None, "last_health": None, "events": []}
+        try:
+            with self.state_file.open("r", encoding="utf-8") as handle:
+                value = json.load(handle)
+            if not isinstance(value, dict):
+                raise ValueError("state must be an object")
+            merged = dict(default)
+            merged.update(value)
+            if not isinstance(merged.get("events"), list):
+                merged["events"] = []
+            return merged
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return default
+
+    def save_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        value = dict(state)
+        value["version"] = 1
+        value["updated_at"] = _utc_now()
+        _atomic_write(self.state_file, value)
+        return value
+
+    def health_check(self, ports: list[int] | None = None, *, host: str = "127.0.0.1",
+                     timeout: float = 0.25) -> dict[str, Any]:
+        """Return local-only health evidence; individual probe failures are non-fatal."""
+        result: dict[str, Any] = {"ok": True, "checked_at": _utc_now(), "components": {}}
+        try:
+            with self.nodes_file.open("r", encoding="utf-8-sig") as handle:
+                nodes = json.load(handle)
+            result["components"]["nodes_file"] = {"ok": isinstance(nodes, dict), "path": str(self.nodes_file)}
+        except Exception as exc:  # health reporting must never block callers
+            result["components"]["nodes_file"] = {"ok": False, "path": str(self.nodes_file), "error": type(exc).__name__}
+        state_ok = True
+        try:
+            self.load_state()
+        except Exception as exc:
+            state_ok = False
+            result["components"]["state"] = {"ok": False, "error": type(exc).__name__}
+        if state_ok:
+            result["components"]["state"] = {"ok": True, "path": str(self.state_file)}
+        probe_results = []
+        for port in ports or []:
+            row = {"port": port, "open": False}
+            try:
+                with socket.create_connection((host, int(port)), timeout=max(0.01, timeout)):
+                    row["open"] = True
+            except (OSError, ValueError, TypeError) as exc:
+                row["error"] = type(exc).__name__
+            probe_results.append(row)
+        result["ports"] = probe_results
+        result["ok"] = all(c.get("ok", False) for c in result["components"].values())
+        return result
+
+    def prompt(self, template: str = "health_check", **values: Any) -> dict[str, Any]:
+        if template not in PROMPT_TEMPLATES:
+            return {"ok": False, "code": "unknown_prompt_template", "allowed": sorted(PROMPT_TEMPLATES)}
+        try:
+            text = PROMPT_TEMPLATES[template].format(**values)
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "code": "invalid_prompt_values", "error": str(exc)}
+        return {"ok": True, "template": template, "system": SYSTEM_PROMPT, "prompt": text}
+
+    def action_allowed(self, action: str) -> bool:
+        return isinstance(action, str) and action in ALLOWED_ACTIONS
+
+    def dispatch(self, action: str, args: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Dispatch only whitelisted local actions; all errors become recoverable results."""
+        if not self.action_allowed(action):
+            return {"ok": False, "code": "action_not_allowed", "action": action, "allowed": sorted(ALLOWED_ACTIONS), "recoverable": True}
+        args = dict(args or {})
+        try:
+            if action == "health_check":
+                result = self.health_check(args.get("ports"), host=str(args.get("host", "127.0.0.1")))
+            elif action == "read_state":
+                result = self.load_state()
+            else:  # record_event
+                state = self.load_state()
+                event = {"at": _utc_now(), "type": str(args.get("type", "event")), "details": args.get("details")}
+                state["events"] = (state.get("events") or [])[-99:] + [event]
+                result = self.save_state(state)
+            return {"ok": True, "action": action, "result": result}
+        except Exception as exc:  # never let a resident-engineer failure block the hub
+            return {"ok": False, "action": action, "code": "action_failed", "error": str(exc)[:200], "recoverable": True}
+
+
+__all__ = ["ResidentEngineer", "SYSTEM_PROMPT", "PROMPT_TEMPLATES", "ALLOWED_ACTIONS"]
