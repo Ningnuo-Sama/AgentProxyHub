@@ -676,7 +676,17 @@ def tool_refresh_upstream_nodes(args: Dict[str, Any]) -> Dict[str, Any]:
     """刷新上游节点快照；失败时保留上一份有效快照，不改绑定端口。"""
     wanted = set(args.get("provider_ids") or [])
     sources = [s for s in load_sources() if not wanted or s.get("id") in wanted]
-    return refresh_sources(sources, dry_run=bool(args.get("dry_run", False)))
+    old_proxy = os.environ.get("APHUB_UPSTREAM_SOCKS5")
+    try:
+        proxy = args.get("socks5_proxy")
+        if proxy:
+            os.environ["APHUB_UPSTREAM_SOCKS5"] = str(proxy)
+        return refresh_sources(sources, dry_run=bool(args.get("dry_run", False)))
+    finally:
+        if old_proxy is None:
+            os.environ.pop("APHUB_UPSTREAM_SOCKS5", None)
+        else:
+            os.environ["APHUB_UPSTREAM_SOCKS5"] = old_proxy
 
 
 def tool_get_upstream_sources(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -920,7 +930,9 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "provider_ids": {"type": "array", "items": {"type": "string"}},
-                "dry_run": {"type": "boolean", "default": False}
+                "dry_run": {"type": "boolean", "default": False},
+                "socks5_proxy": {"type": "string", "description": "可选本地 SOCKS5 出口，如 127.0.0.1:21001；不包含凭据"},
+                "use_profile_fallback": {"type": "boolean", "description": "允许使用已登记的本地 Profile 回退文件", "default": True}
             }
         },
         "handler": tool_refresh_upstream_nodes
