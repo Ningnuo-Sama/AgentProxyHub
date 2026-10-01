@@ -11,6 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Callable
+from functools import wraps
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
@@ -59,6 +60,22 @@ def record_response_usage(provider: str, model: str, response: Any, *, status: s
                         total_tokens=value("total_tokens"), request_id=request_id)
 
 
+def tracked_call(provider: str, model: str, *, request_id: str | None = None):
+    """Decorator for local adapters: records usage from a returned compatible response."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                response = func(*args, **kwargs)
+            except Exception:
+                record_usage(provider, model, status="error", request_id=request_id)
+                raise
+            record_response_usage(provider, model, response, request_id=request_id)
+            return response
+        return wrapper
+    return decorator
+
+
 def usage_summary() -> dict[str, Any]:
     totals: dict[str, dict[str, float]] = {}
     count = 0
@@ -77,4 +94,4 @@ def usage_summary() -> dict[str, Any]:
     return {"ok": True, "count": count, "by_model": totals, "file": str(USAGE_FILE), "secrets_logged": False}
 
 
-__all__ = ["USAGE_FILE", "record_usage", "record_response_usage", "usage_summary"]
+__all__ = ["USAGE_FILE", "record_usage", "record_response_usage", "tracked_call", "usage_summary"]
