@@ -403,6 +403,7 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
     profile = str(args.get("profile") or "").strip()
     country = str(args.get("country") or "").strip().upper()
     scene = str(args.get("scene") or "general").strip().lower()
+    dry_run = bool(args.get("dry_run", False))
     if not profile:
         return {"success": False, "code": "profile_required", "bindings_changed": False}
     try:
@@ -421,6 +422,8 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
         with _bindings_lock():
             bindings = get_bindings_data()
             previous_port = next((p for p, value in bindings.items() if value.get("profile") == profile), None)
+            if dry_run:
+                return {"success": True, "dry_run": True, "profile": profile, "from_port": previous_port, "to_port": candidate["port"], "candidate": candidate, "bindings_changed": False, "paid_calls": False, "auto_rebind": True}
             for port, value in list(bindings.items()):
                 if value.get("profile") == profile:
                     del bindings[port]
@@ -1287,7 +1290,7 @@ TOOLS = [
     {
         "name": "auto_rebind_profile",
         "description": "Agent 自动选择健康出口并迁移环境绑定；需显式开启 auto_rebind_enabled，不调用付费服务",
-        "inputSchema": {"type": "object", "properties": {"profile": {"type": "string"}, "country": {"type": "string"}, "scene": {"type": "string"}, "min_rating": {"type": "string"}}, "required": ["profile"]},
+        "inputSchema": {"type": "object", "properties": {"profile": {"type": "string"}, "country": {"type": "string"}, "scene": {"type": "string"}, "min_rating": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["profile"]},
         "handler": tool_auto_rebind_profile
     },
     {
