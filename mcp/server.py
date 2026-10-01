@@ -939,6 +939,21 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def tool_cliproxyapi_health(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Read-only health and usage surface for the local CLIProxyAPI installations."""
+    import urllib.request
+    rows = []
+    for port, role in ((8318, "primary_gui"), (8319, "fallback")):
+        row = {"port": port, "role": role, "url": f"http://127.0.0.1:{port}"}
+        try:
+            with urllib.request.urlopen(row["url"] + "/v1/models", timeout=2) as response:
+                row.update({"status": "ok", "http_status": response.status})
+        except Exception as exc:
+            row.update({"status": "unavailable", "error": type(exc).__name__})
+        rows.append(row)
+    return {"ok": True, "installations": rows, "usage_statistics_source": r"D:\Program Files\EasyCLIProxyAPI\usage-records\usage.db", "paid_probe": False, "bindings_changed": False}
+
+
 def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取本机已登记渠道的低风险健康状态；不生成、不扣费、不读取明文凭据。"""
     import urllib.request
@@ -1065,6 +1080,12 @@ TOOLS = [
         "description": "驻场工程师恢复已知 mihomo 内核并复核固定端口；不换绑、不付费",
         "inputSchema": {"type": "object", "properties": {"runner": {"type": "string"}, "wait_seconds": {"type": "number"}, "ports": {"type": "array", "items": {"type": "integer"}}}},
         "handler": tool_kernel_recovery
+    },
+    {
+        "name": "cliproxyapi_health",
+        "description": "检查本机 CLIProxyAPI 8318/8319 运行态并返回用量账本位置，不发起付费生成",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_cliproxyapi_health
     },
     {
         "name": "channel_health",
