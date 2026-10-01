@@ -858,21 +858,37 @@ try {
 } catch { }
 $script:MessageSeen = @{}
 $script:LastGatewayLogLength = 0
-$script:GatewayLogPath = Join-Path $Dir 'logs\panel.log'
+$script:GatewayLogSources = @(
+    [pscustomobject]@{ Name='APH'; Path=(Join-Path $Dir 'logs\panel.log'); Kind='panel' },
+    [pscustomobject]@{ Name='FengWoBridge'; Path='D:\Program Files\FengWoBridge\logs\panel.log'; Kind='panel' },
+    [pscustomobject]@{ Name='Flow'; Path='D:\GitHub\Flow-Tools\logs\gateway.log'; Kind='flow' },
+    [pscustomobject]@{ Name='Antigravity'; Path='D:\ProgramData\AntigravityTools\logs\gateway.log'; Kind='antigravity' }
+)
+
+function Convert-GatewayLine([string]$source, [string]$line, [string]$kindHint) {
+    if ([string]::IsNullOrWhiteSpace($line)) { return $null }
+    $clean = ($line -replace '[\r\n]+', ' ').Trim()
+    # 去时间戳、PID和技术前缀，只保留人类可读的事件主体。
+    $clean = $clean -replace '^\[[^\]]+\]\s*', ''
+    $clean = $clean -replace '^\d{4}-\d{2}-\d{2}[T\s][^\s]+\s+', ''
+    $parts = $clean -split '\s+', 4
+    $kind = if ($parts.Count -ge 3 -and $parts[2] -match '^[A-Za-z][A-Za-z0-9_-]*$') { $parts[2].ToUpperInvariant() } else { $kindHint.ToUpperInvariant() }
+    $detail = if ($parts.Count -ge 4) { $parts[3] } else { $clean }
+    $detail = $detail -replace '(?i)(token|secret|authorization|cookie)=\S+', '$1=[已脱敏]'
+    $tone = if ($clean -match '(?i)error|exception|fail|fatal|alert') { 'alert' } elseif ($clean -match '(?i)warn|retry|timeout|degrad') { 'warn' } else { 'normal' }
+    return [pscustomobject]@{ Source=$source; Category=$kind; Detail=$detail; Tone=$tone }
+}
 
 function Import-GatewayDigest {
-    if (-not (Test-Path -LiteralPath $script:GatewayLogPath)) { return }
-    try {
-        $lines = @(Get-Content -LiteralPath $script:GatewayLogPath -Encoding UTF8 -Tail 30)
-        foreach ($line in $lines) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            $parts = $line -split '\s+', 4
-            $kind = if ($parts.Count -ge 3) { $parts[2].ToUpperInvariant() } else { 'GATEWAY' }
-            $detail = if ($parts.Count -ge 4) { $parts[3] } else { '网关状态有更新' }
-            $tone = if ($kind -match 'ERROR|FAIL|ALERT') { 'alert' } elseif ($kind -match 'WARN|GUARD|RETRY') { 'warn' } else { 'normal' }
-            Add-CockpitMessage $kind $detail $tone
-        }
-    } catch { }
+    foreach ($source in $script:GatewayLogSources) {
+        if (-not (Test-Path -LiteralPath $source.Path)) { continue }
+        try {
+            foreach ($line in @(Get-Content -LiteralPath $source.Path -Encoding UTF8 -Tail 12)) {
+                $event = Convert-GatewayLine $source.Name $line $source.Kind
+                if ($event) { Add-CockpitMessage "$($event.Source)/$($event.Category)" $event.Detail $event.Tone }
+            }
+        } catch { }
+    }
 }
 
 function Add-CockpitMessage([string]$category, [string]$text, [string]$tone = 'normal') {
@@ -891,6 +907,7 @@ function Add-CockpitMessage([string]$category, [string]$text, [string]$tone = 'n
     }
     $item = New-Object Windows.Controls.ListBoxItem
     $item.Content = "[$category] $clean"
+    $item.ToolTip = '来源已归一化；原始日志不会直接展示'
     $feedColor = if ($tone -eq 'warn') { '#FFB347' } elseif ($tone -eq 'alert') { '#FF6B7D' } else { '#D6E4EE' }
     $item.Foreground = New-GBrush $feedColor
     $item.Padding = [Windows.Thickness]::new(4,5,4,5)
