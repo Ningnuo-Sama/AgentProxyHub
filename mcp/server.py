@@ -411,7 +411,10 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
         if not switches.get("auto_rebind_enabled"):
             return {"success": False, "code": "auto_rebind_disabled", "bindings_changed": False}
         candidates = tool_list_matched_proxies({"scene": scene, "country": country, "min_rating": args.get("min_rating", "B"), "limit": 20})
-        rows = [row for row in candidates.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked")]
+        rows = [row for row in candidates.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked") and row.get("ready")]
+        if not rows and not country and scene == "general":
+            fallback = tool_list_matched_proxies({"scene": "general", "country": "", "min_rating": "F", "limit": 125})
+            rows = [row for row in fallback.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked") and row.get("ready")]
         if not rows:
             return {"success": False, "code": "no_healthy_candidate", "bindings_changed": False, "auto_rebind": True}
         candidate = rows[0]
