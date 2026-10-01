@@ -239,8 +239,17 @@ def tool_list_scenes(args: Dict[str, Any]) -> Any:
         ]
     }
 
+def load_confidence_index() -> Dict[str, Any]:
+    path = os.path.join(DATA_DIR, "confidence_state.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("ports", {})
+    except Exception:
+        return {}
+
+
 def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
-    """按场景、国家、最低评分搜索并返回可用的本地端口"""
+    """按场景、国家、最低评分搜索；Google国家优先，实时置信度只追加不改旧字段。"""
     scene = args.get("scene", "claude").lower()
     country = (args.get("country") or "").upper()
     min_rating = (args.get("min_rating") or "B").upper()
@@ -319,14 +328,25 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
             "bound_profile": bound.get("profile") if bound else None
         })
 
-    # 排序：未锁定的在前，按健康分降序；healthScore 缺失按 0 处理，避免 None 比较崩溃
-    matched.sort(key=lambda x: (not x["is_locked"], x["health_score"] or 0), reverse=True)
-    top = matched[:limit]
-
-    # 运行态预检：只测即将返回的这几条，避免 125 次全量连接
-    open_map = probe_local_ports(listen_ip, [m["port"] for m in top])
-    for m in top:
+    # 运行态合并：实时置信度优先用于风险判断，静态字段保留作历史证据。
+    runtime = load_confidence_index()
+    # 对所有静态候选做 TCP 预检，避免把静态 S 误报为当前可用。
+    open_map = probe_local_ports(listen_ip, [m["port"] for m in matched])
+    for m in matched:
+        r = runtime.get(str(m["port"])) or {}
+        m["static_rating"] = m["health_rating"]
+        m["static_score"] = m["health_score"]
+        m["runtime_status"] = "known" if r else "unknown"
+        m["runtime_tier"] = r.get("tier") if r else None
+        m["runtime_score"] = r.get("score") if r else None
+        m["runtime_vetoed"] = bool(r.get("vetoed")) if r else False
+        m["runtime_updated_at"] = r.get("updatedAt") if r else None
         m["port_open"] = open_map.get(int(m["port"]), False)
+        m["ready"] = bool(m["port_open"] and r and not r.get("vetoed") and not r.get("offline"))
+        m["health_rating"] = (r.get("tier") or m["health_rating"]) if r else m["health_rating"]
+        m["health_score"] = r.get("score") if r and r.get("score") is not None else m["health_score"]
+    matched.sort(key=lambda x: (x["ready"], x["health_score"] or 0, not x["is_locked"]), reverse=True)
+    top = matched[:limit]
 
     stickiness = get_antigravity_stickiness()
     account_by_port = {s["port"]: s["account"] for s in stickiness if s.get("port")}
@@ -334,17 +354,19 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
         m["account_bound"] = account_by_port.get(int(m["port"]))
 
     snap = get_snapshot_info(data)
-    ready = any(open_map.values())
+    ready = any(m.get("ready") for m in matched)
     out: Dict[str, Any] = {
         "scene": scene,
         "total_matched": len(matched),
+        "total_ready": sum(1 for m in matched if m.get("ready")),
         "results": top,
         "snapshot": snap,
         "local_exit": {
             "listen": listen_ip,
-            "probed": len(top),
+            "probed": len(matched),
             "open": sum(1 for v in open_map.values() if v),
             "ready": ready,
+            "semantics": "ready=port_open && runtime known && not vetoed/offline",
         },
         "antigravity_account_stickiness": stickiness,
     }

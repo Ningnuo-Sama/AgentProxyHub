@@ -32,7 +32,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(ROOT, "data")
+DATA_DIR = os.environ.get("APHUB_DATA_DIR") or os.path.join(ROOT, "data")
 NODES_FILE = os.path.join(DATA_DIR, "nodes.json")
 STATE_FILE = os.path.join(DATA_DIR, "confidence_state.json")
 
