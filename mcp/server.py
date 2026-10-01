@@ -28,8 +28,8 @@ FALLBACK_NODES = "D:\\Program Files\\FengWoBridge\\nodes.json"
 # 跨进程账本锁：MCP 可能被多个 Agent 客户端各拉一个实例（人手一个），
 # 加上 CloakMulti GUI 共写 bindings.json，读-改-写必须整段持锁防丢更新。
 BINDINGS_LOCK = os.path.join(DATA_DIR, "bindings.lock")
-UPSTREAMS_FILE = os.path.join(DATA_DIR, "upstreams.json")
-UPSTREAMS_LOCK = os.path.join(DATA_DIR, "upstreams.lock")
+UPSTREAMS_FILE = os.environ.get("APHUB_UPSTREAMS_FILE") or os.path.join(DATA_DIR, "upstreams.json")
+UPSTREAMS_LOCK = os.environ.get("APHUB_UPSTREAMS_LOCK") or os.path.join(DATA_DIR, "upstreams.lock")
 
 # Antigravity Tools 的账号粘性锚定（只读）。注意与上面的环境锁定账本是两码事：
 # bindings.json 记「指纹浏览器环境 → 端口」，这里记「Google 账号 → 出口」，

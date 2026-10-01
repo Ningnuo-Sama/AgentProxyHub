@@ -17,8 +17,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("APHUB_DATA_DIR") or os.path.join(ROOT_DIR, "data")
-UPSTREAMS_FILE = os.path.join(DATA_DIR, "upstreams.json")
-SNAPSHOT_FILE = os.path.join(DATA_DIR, "upstream_nodes.json")
+UPSTREAMS_FILE = os.environ.get("APHUB_UPSTREAMS_FILE") or os.path.join(DATA_DIR, "upstreams.json")
+SNAPSHOT_FILE = os.environ.get("APHUB_SNAPSHOT_FILE") or os.path.join(DATA_DIR, "upstream_nodes.json")
 
 SUPPORTED_TYPES = {"api_token", "subscription_url", "profile_path"}
 NODE_TYPES = {"anytls", "trojan", "vless", "vmess", "ss", "ss2022", "hysteria2", "tuic", "http", "socks5"}

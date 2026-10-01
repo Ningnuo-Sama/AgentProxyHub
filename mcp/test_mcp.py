@@ -9,18 +9,25 @@ import subprocess
 import json
 import sys
 import os
+import tempfile
 
 SERVER_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.py")
 
 def run_test():
     print(f"[TEST] Starting MCP server process: {SERVER_PY}")
+    temp_dir = tempfile.TemporaryDirectory(prefix="aphub-mcp-test-")
+    env = os.environ.copy()
+    env["APHUB_DATA_DIR"] = temp_dir.name
+    env["APHUB_UPSTREAMS_FILE"] = os.path.join(temp_dir.name, "upstreams.json")
+    env["APHUB_UPSTREAMS_LOCK"] = os.path.join(temp_dir.name, "upstreams.lock")
     p = subprocess.Popen(
         [sys.executable, SERVER_PY],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        encoding="utf-8"
+        encoding="utf-8",
+        env=env,
     )
 
     def send_recv(req):
@@ -129,6 +136,8 @@ def run_test():
         print("\n🎉 ALL 7 MCP END-TO-END TESTS PASSED!")
     finally:
         p.terminate()
+        p.wait(timeout=5)
+        temp_dir.cleanup()
 
 if __name__ == "__main__":
     run_test()
