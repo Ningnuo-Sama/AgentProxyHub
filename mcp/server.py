@@ -867,8 +867,24 @@ def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             result[name] = {"status": "unavailable", "url": url, "error": type(exc).__name__}
     result["glm"] = {"status": "configured_external_only", "paid_probe": False}
-    result["kie"] = {"status": "configured_external_unverified", "paid_probe": False}
-    result["aicost"] = {"status": "configured_external_unverified", "paid_probe": False}
+    visual_cfg = r"D:\GitHub\ariadne\tools\ariadne-visual-pro\config.local.json"
+    try:
+        with open(visual_cfg, "r", encoding="utf-8-sig") as handle:
+            visual = json.load(handle)
+    except Exception:
+        visual = {}
+    for name, url, key_name in (("kie", "https://api.kie.ai/api/v1/chat/credit", "kie_api_key"),
+                                ("aicost", "https://www.aicost.me/v1/models", "aicost_api_key")):
+        key = str(visual.get(key_name) or "").strip()
+        if not key:
+            result[name] = {"status": "not_configured", "paid_probe": False}
+            continue
+        try:
+            request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result[name] = {"status": "ok", "http_status": response.status, "paid_probe": False}
+        except Exception as exc:
+            result[name] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
     result["cliproxyapi"] = {"status": "not_running", "ports": [8318, 8319]}
     return {"ok": True, "channels": result, "paid_calls": False, "bindings_changed": False}
 
