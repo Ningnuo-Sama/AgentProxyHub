@@ -32,7 +32,10 @@ def _vault_token() -> str | None:
             if entry.get("category") == "notifications" and ("hermes" in source_name or "notify" in source_name or "jing" in source_name):
                 raw = read_secret(entry["id"]).decode("utf-8", "replace").strip()
                 if raw:
-                    return raw.splitlines()[0].strip()
+                    for line in raw.splitlines():
+                        candidate = line.strip()
+                        if candidate and "=" not in candidate and ":" not in candidate and not candidate.startswith("{"):
+                            return candidate
     except (OSError, ValueError, KeyError, UnicodeError):
         return None
     return None
