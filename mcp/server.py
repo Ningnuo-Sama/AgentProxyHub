@@ -791,7 +791,7 @@ def _get_resident_scheduler():
     global _RESIDENT_SCHEDULER
     if _RESIDENT_SCHEDULER is None:
         from core.autonomy_core import AutonomyState, EventStore
-        from core.jingguanjia_notify import notify_jingguanjia
+        from core.alert_dispatch import notify_all
         from core.resident_scheduler import ResidentScheduler
         state = AutonomyState()
         _RESIDENT_SCHEDULER = ResidentScheduler(
@@ -799,7 +799,7 @@ def _get_resident_scheduler():
             events=EventStore(),
             health_check=lambda: {"status": "ok", "source": "local_snapshot",
                                   "confidence_state": os.path.exists(CONFIDENCE_STATE_FILE)},
-            notifier=notify_jingguanjia,
+            notifier=lambda text, **kwargs: all(notify_all(text, event_id=kwargs.get("event_id")).values()),
             interval_seconds=float(os.environ.get("APHUB_RESIDENT_INTERVAL", "300")),
         )
     return _RESIDENT_SCHEDULER
@@ -847,6 +847,17 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
 
 
+def tool_usage_log(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Record or summarize secret-free model usage."""
+    from core.model_usage import record_usage, usage_summary
+    if args.get("action", "summary") == "record":
+        return record_usage(args.get("provider", ""), args.get("model", ""),
+                            status=args.get("status", "unknown"), input_tokens=args.get("input_tokens", 0),
+                            output_tokens=args.get("output_tokens", 0), total_tokens=args.get("total_tokens"),
+                            estimated_cost=args.get("estimated_cost"), request_id=args.get("request_id"))
+    return usage_summary()
+
+
 def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取已批准的模型路由策略；仅读，不切换客户端或外部模型。"""
     policy_file = os.path.join(CONFIG_DIR, "model_policy.json")
@@ -866,13 +877,14 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     result = ResidentEngineer().dispatch("recover_mihomo", {"runner": runner, "wait_seconds": args.get("wait_seconds", 12), "ports": args.get("ports")})
     if result.get("ok"):
         try:
-            from core.jingguanjia_notify import notify_jingguanjia
-            result["jingguanjia_notified"] = notify_jingguanjia(
+            from core.alert_dispatch import notify_all
+            sent = notify_all(
                 "AgentProxyHub 内核死亡演练：驻场工程师已发现并恢复 mihomo，固定端口已复核。",
                 event_id="agentproxyhub-kernel-recovery-" + str(int(time.time())),
                 emote="happy", motion="hop")
+            result["notifications"] = sent
         except Exception:
-            result["jingguanjia_notified"] = False
+            result["notifications"] = {"jingguanjia": False, "hermes_weixin": False}
     return result
 
 
@@ -979,6 +991,12 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "usage_log",
+        "description": "记录或汇总不含密钥和提示词的模型消耗日志",
+        "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["summary", "record"]}, "provider": {"type": "string"}, "model": {"type": "string"}, "status": {"type": "string"}, "input_tokens": {"type": "integer"}, "output_tokens": {"type": "integer"}, "total_tokens": {"type": "integer"}, "estimated_cost": {"type": "number"}, "request_id": {"type": "string"}}},
+        "handler": tool_usage_log
+    },
     {
         "name": "model_policy",
         "description": "读取正式模型路由策略：日常 Gemini 3.8 Flash Tiered，GLM 兜底，最高事态使用 AICost GPT-6.1-SOL；只读不自动切换",

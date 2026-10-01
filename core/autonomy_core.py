@@ -126,7 +126,9 @@ class EventStore:
 class AutonomyState:
     """小型开关状态账本，原子写入并保留版本号。"""
 
-    DEFAULTS = {"enabled": False, "routing_enabled": False, "download_guard_enabled": True}
+    DEFAULTS = {"enabled": False, "routing_enabled": False, "download_guard_enabled": True,
+               "auto_rebind_enabled": False, "hermes_notify_enabled": True,
+               "usage_logging_enabled": True}
 
     def __init__(self, path: str | os.PathLike[str] = STATE_FILE):
         self.path = Path(path)

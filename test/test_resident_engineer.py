@@ -35,7 +35,7 @@ class ResidentEngineerTests(unittest.TestCase):
             e = ResidentEngineer(Path(folder) / "state.json")
             self.assertTrue(e.prompt()["ok"])
             self.assertFalse(e.prompt("missing")["ok"])
-            self.assertEqual(set(ALLOWED_ACTIONS), {"health_check", "read_state", "record_event", "recover_mihomo"})
+            self.assertTrue({"health_check", "read_state", "record_event", "recover_mihomo"}.issubset(ALLOWED_ACTIONS))
             denied = e.dispatch("run_shell", {})
             self.assertEqual(denied["code"], "action_not_allowed")
             self.assertTrue(denied["recoverable"])

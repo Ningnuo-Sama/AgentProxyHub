@@ -1,13 +1,18 @@
-# 二进制与编译发行包 (通过 GitHub Releases 专线发布，不污染源码仓库)
+# 二进制与编译发行包
 bin/
 release/
 
-# 私有配置与敏感数据 (绝对严防泄露)
+# 私有配置与敏感数据
 config/config.yaml
 data/
 *.tsv
 *.log
 logs/
+
+# 凭据金库与本地运行材料
+D:/ProgramData/AgentProxyHub/
+credentials/
+*.dpapi
 
 # Python 缓存
 __pycache__/
@@ -29,6 +34,6 @@ docs/auto-pilot-workflow.html
 docs/auto-pilot-workflow.json
 docs/UPSTREAM_AIRPORT_TOKEN_RECON_REPORT_*.md
 
-# 运行期敏感数据（订阅凭据 / 内核控制密钥）
+# 运行期敏感数据
 bridge.json
 config/bridge.json
