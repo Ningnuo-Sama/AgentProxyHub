@@ -101,7 +101,7 @@ def get_nodes_data() -> Dict[str, Any]:
     path = NODES_FILE if os.path.exists(NODES_FILE) else FALLBACK_NODES
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
         except Exception:
             pass

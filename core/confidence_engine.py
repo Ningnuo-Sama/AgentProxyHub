@@ -218,7 +218,7 @@ def load_nodes_index() -> Dict[int, Dict[str, Any]]:
     if not os.path.exists(NODES_FILE):
         return {}
     try:
-        with open(NODES_FILE, "r", encoding="utf-8") as f:
+        with open(NODES_FILE, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         return {n["port"]: n for n in data.get("nodes", []) if "port" in n}
     except Exception:
