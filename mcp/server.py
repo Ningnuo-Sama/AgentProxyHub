@@ -847,6 +847,32 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
 
 
+def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
+    """读取本机已登记渠道的低风险健康状态；不生成、不扣费、不读取明文凭据。"""
+    import urllib.request
+    targets = {
+        "gemini_antigravity": "http://127.0.0.1:8045/health",
+        "flow_tools": "http://127.0.0.1:8001/health",
+        "openviking_gateway": "http://127.0.0.1:18790/health",
+        "jingguanjia": "http://127.0.0.1:8766/health",
+    }
+    requested = args.get("channels")
+    if isinstance(requested, list) and requested:
+        targets = {k: v for k, v in targets.items() if k in requested}
+    result = {}
+    for name, url in targets.items():
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                result[name] = {"status": "ok", "http_status": response.status, "url": url}
+        except Exception as exc:
+            result[name] = {"status": "unavailable", "url": url, "error": type(exc).__name__}
+    result["glm"] = {"status": "configured_external_only", "paid_probe": False}
+    result["kie"] = {"status": "configured_external_unverified", "paid_probe": False}
+    result["aicost"] = {"status": "configured_external_unverified", "paid_probe": False}
+    result["cliproxyapi"] = {"status": "not_running", "ports": [8318, 8319]}
+    return {"ok": True, "channels": result, "paid_calls": False, "bindings_changed": False}
+
+
 def tool_resident_engineer(args: Dict[str, Any]) -> Dict[str, Any]:
     """驻场工程师本地白名单动作与提示词模板；不调用付费模型。"""
     try:
@@ -887,6 +913,12 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "channel_health",
+        "description": "检查 Gemini、Flow-Tools、OpenViking、鲸管家等本地渠道；外部 Kie/AICost/GLM 仅标记配置状态，不发生成或付费请求",
+        "inputSchema": {"type": "object", "properties": {"channels": {"type": "array", "items": {"type": "string"}}}},
+        "handler": tool_channel_health
+    },
     {
         "name": "resident_engineer",
         "description": "驻场工程师本地只读检查、状态读取和事件记录；不调用付费模型、不改绑定",
