@@ -2,7 +2,16 @@
 chcp 936 >nul
 setlocal
 cd /d "%~dp0"
-title AgentProxyHub 启动服务
+title AgentProxyHub 启动服务rem Optional Jingguanjia desktop pet integration; override with JINGGUANJIA_EXE.
+set "JG_EXE=%JINGGUANJIA_EXE%"
+if not defined JG_EXE if exist "D:\Program Files\鲸管家\鲸管家.exe" set "JG_EXE=D:\Program Files\鲸管家\鲸管家.exe"
+if not defined JG_EXE if exist "D:\GitHub\鲸管家\release\win-unpacked\鲸管家.exe" set "JG_EXE=D:\GitHub\鲸管家\release\win-unpacked\鲸管家.exe"
+if defined JG_EXE (
+    echo [0/2] 正在启动鲸管家桌宠...
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$ok=$false; try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8766/health' -TimeoutSec 1; $ok=($r.StatusCode -eq 200) } catch {}; if (-not $ok) { Start-Process -FilePath $env:JG_EXE -WindowStyle Hidden }; 1..32 ^| %% { if (-not $ok) { try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8766/health' -TimeoutSec 1; $ok=($r.StatusCode -eq 200) } catch {}; if (-not $ok) { Start-Sleep -Milliseconds 250 } } }; if (-not $ok) { Write-Host '[AgentProxyHub] 鲸管家健康检查超时，继续启动代理' }"
+) else (
+    echo [提示] 未找到鲸管家打包版，跳过桌宠联动。可设置 JINGGUANJIA_EXE。
+)
 echo ========================================================
 echo       AgentProxyHub · 智能多出口代理调度中枢
 echo ========================================================
