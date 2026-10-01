@@ -28,7 +28,8 @@ def _vault_token() -> str | None:
         import json
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         for entry in manifest.get("entries", []):
-            if entry.get("category") == "notifications" and "token" in str(entry.get("source_name", "")).lower():
+            source_name = str(entry.get("source_name", "")).lower()
+            if entry.get("category") == "notifications" and ("hermes" in source_name or "notify" in source_name or "jing" in source_name):
                 raw = read_secret(entry["id"]).decode("utf-8", "replace").strip()
                 if raw:
                     return raw.splitlines()[0].strip()
