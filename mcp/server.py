@@ -846,6 +846,11 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
         action = str(args.get("action") or "status").strip().lower()
         state = AutonomyState()
         scheduler_actions = {"start", "stop", "scheduler_status", "run_once"}
+        if action == "auto_rebind":
+            result = tool_auto_rebind_profile(args)
+            return {"ok": bool(result.get("success")), "action": action, "result": result,
+                    "auto_rebind": True, "paid_calls": False,
+                    "bindings_changed": bool(result.get("bindings_changed"))}
         if action in scheduler_actions:
             scheduler = _get_resident_scheduler()
             if action == "start":
@@ -876,7 +881,7 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": True, "action": action, "removed": removed}
         if action == "summary":
             return {"ok": True, "action": action, "summary": store.summary(retention_days=int(args.get("retention_days", 7)))}
-        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "cleanup", "summary"]}
+        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "auto_rebind", "cleanup", "summary"]}
     except (ValueError, TypeError, OSError) as exc:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
 
