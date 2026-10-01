@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional
 
 # 根目录定位
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(ROOT_DIR, "data")
+DATA_DIR = os.environ.get("APHUB_DATA_DIR") or os.path.join(ROOT_DIR, "data")
 CONFIG_DIR = os.path.join(ROOT_DIR, "config")
 
 NODES_FILE = os.path.join(DATA_DIR, "nodes.json")
@@ -266,10 +266,11 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
         if tier_weight.get(rating, -1) < min_w:
             continue
 
-        # 2. 国家过滤
+        # 2. 国家过滤：Google 自判国家优先，物理国家只作辅助展示
+        g_code = (n.get("googleCountryCode") or n.get("googleCountry") or "").upper()
         c_code = (n.get("countryCode") or "").upper()
         c_name = (n.get("country") or "").upper()
-        if country and country not in [c_code, c_name]:
+        if country and country not in [g_code, c_code, c_name]:
             continue
 
         # 3. 场景判定
@@ -308,6 +309,8 @@ def tool_list_matched_proxies(args: Dict[str, Any]) -> Any:
             "http_url": f"http://{listen_ip}:{http_port}",
             "node_name": n.get("orig") or n.get("name"),
             "country": n.get("country"),
+            "google_country": n.get("googleCountry"),
+            "country_source": "google" if n.get("googleCountry") not in (None, "", "FAIL", "Unknown") else "physical",
             "city": n.get("city"),
             "kind": n.get("kind"),
             "health_rating": rating,
@@ -603,6 +606,50 @@ def tool_set_upstream_credential(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def tool_google_verify_proxy(args: Dict[str, Any]) -> Dict[str, Any]:
+    """只读验证端口经 Google 自己判定的国家；不改节点、不改绑定。"""
+    port = int(args.get("port") or 0)
+    if not (21001 <= port <= 22045):
+        return {"ok": False, "verified": False, "error": "端口不在受保护出口段"}
+    timeout = max(3, min(int(args.get("timeout", 8)), 30))
+    import subprocess as _sp
+    started = time.time()
+    cmd = ["curl.exe", "-s", "--max-time", str(timeout), "-x",
+           f"socks5h://127.0.0.1:{port}", "https://policies.google.com/terms"]
+    try:
+        cp = _sp.run(cmd, capture_output=True, text=True,
+                     creationflags=0x08000000, timeout=timeout + 3)
+        body = cp.stdout or ""
+        m = re.search(r"Country version:</a>\s*([^<]+)", body, re.IGNORECASE)
+        country = m.group(1).strip() if m else ("Unknown" if "policies.google.com" in body else "FAIL")
+        return {"ok": country not in ("FAIL",), "verified": country not in ("FAIL", "Unknown"),
+                "port": port, "googleCountry": country,
+                "latency_ms": int((time.time() - started) * 1000),
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "evidence": "Google policies Country version" if country not in ("FAIL", "Unknown") else "Google response did not expose Country version"}
+    except Exception as e:
+        return {"ok": False, "verified": False, "port": port, "error": str(e)[:200],
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def tool_agent_recommend_proxy(args: Dict[str, Any]) -> Dict[str, Any]:
+    """给 Agent 一个 Google 优先的只读决策建议；永不自动改绑。"""
+    port = int(args.get("port") or 0)
+    audit = tool_audit_confidence({"refresh": bool(args.get("refresh", False)), "scope": "bound", "limit": 200})
+    rec = (audit.get("ports") or []) if audit.get("ok") else []
+    row = next((r for r in rec if int(r.get("port", 0)) == port), None)
+    verify = tool_google_verify_proxy({"port": port, "timeout": args.get("timeout", 8)})
+    reasons = []
+    if not verify.get("verified"): reasons.append("Google 未返回可确认的国家")
+    if row and row.get("vetoed"): reasons.append(str(row.get("vetoReason") or "置信度一票否决"))
+    allowed = bool(verify.get("verified")) and not (row and row.get("vetoed"))
+    return {"ok": True, "recommendation_id": f"google-priority-{port}-{int(time.time())}",
+            "port": port, "decision": "retain" if allowed else "hold",
+            "google": verify, "confidence": row, "reasons": reasons,
+            "requires_approval": True, "auto_rebind": False,
+            "note": "以 Google 自判国家为主；本建议不改变账号、Profile 或端口绑定"}
+
+
 def tool_refresh_upstream_nodes(args: Dict[str, Any]) -> Dict[str, Any]:
     """刷新上游节点快照；失败时保留上一份有效快照，不改绑定端口。"""
     wanted = set(args.get("provider_ids") or [])
@@ -634,6 +681,33 @@ def tool_get_upstream_sources(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "google_verify_proxy",
+        "description": "通过 Google 自己返回的 Country version 验证端口国家；只读，不修改绑定",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "port": {"type": "integer", "description": "SOCKS5 端口号"},
+                "timeout": {"type": "integer", "default": 8}
+            },
+            "required": ["port"]
+        },
+        "handler": tool_google_verify_proxy
+    },
+    {
+        "name": "agent_recommend_proxy",
+        "description": "以 Google 自判国家和实时置信度生成只读建议；不自动换绑",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "port": {"type": "integer"},
+                "refresh": {"type": "boolean", "default": False},
+                "timeout": {"type": "integer", "default": 8}
+            },
+            "required": ["port"]
+        },
+        "handler": tool_agent_recommend_proxy
+    },
     {
         "name": "refresh_upstream_nodes",
         "description": "拉取已登记上游并原子更新节点快照；失败保留上一份有效快照，不修改账号或端口绑定",

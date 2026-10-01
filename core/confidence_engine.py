@@ -78,11 +78,31 @@ def hours_since(iso: Optional[str]) -> Optional[float]:
 
 # ---------------------------------------------------------------- 探测
 
-def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
-    """实测一个本地 SOCKS5 端口：出口 IP + 国家码 + 总耗时。
+def probe_google_country(port: int, timeout: float = 8.0) -> str:
+    """通过代理读取 Google 自己的 Country version；这是账号风控相关的首要国家信号。"""
+    cmd = ["curl.exe", "-s", "--max-time", str(int(timeout)),
+           "-x", f"socks5h://127.0.0.1:{port}",
+           "https://policies.google.com/terms"]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            creationflags=0x08000000, timeout=timeout + 3)
+        body = cp.stdout or ""
+        import re
+        m = re.search(r"Country version:</a>\s*([^<]+)", body, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        if "policies.google.com" in body:
+            return "Unknown"
+    except Exception:
+        pass
+    return "FAIL"
 
-    优先 ipwho.is（一次请求同时拿 IP 与国家码）；失败则退回 api.ipify.org（只有 IP）。
-    返回 {"ok", "ip", "country", "latency_ms", "error"}。
+
+def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
+    """实测一个本地 SOCKS5 端口：物理 IP/国家 + Google 自判国家 + 总耗时。
+
+    Google 自判国家用于账号身份决策；ipwho/api-ipify 只作为物理网络与漂移辅助。
+    返回 {"ok", "ip", "country", "google_country", "latency_ms", "error"}。
     """
     def _curl(url: str) -> Tuple[int, str]:
         cmd = ["curl.exe", "-s", "--max-time", str(int(timeout)),
@@ -107,7 +127,9 @@ def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
             ip = info.get("ip") or ""
             cc = info.get("country_code") or ""
             if ip:
-                return {"ok": True, "ip": ip, "country": cc.upper(), "latency_ms": latency_ms}
+                return {"ok": True, "ip": ip, "country": cc.upper(),
+                        "google_country": probe_google_country(port, timeout),
+                        "latency_ms": latency_ms}
         except (json.JSONDecodeError, IndexError):
             pass
     # 退路：只拿 IP（国家码留空，漂移分级延后到有国码时判定）
@@ -120,7 +142,9 @@ def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
             latency_ms = -1
         ip = lines[0].strip()
         if ip and len(ip) <= 45:
-            return {"ok": True, "ip": ip, "country": "", "latency_ms": latency_ms}
+            return {"ok": True, "ip": ip, "country": "",
+                    "google_country": probe_google_country(port, timeout),
+                    "latency_ms": latency_ms}
     return {"ok": False, "ip": "", "country": "", "latency_ms": -1, "error": "probe_failed"}
 
 # ---------------------------------------------------------------- 打分
@@ -218,10 +242,20 @@ def save_state(state: Dict[str, Any]) -> None:
 
 def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any]],
                   rec: Dict[str, Any]) -> Dict[str, Any]:
-    """把一次探测结果并入时序记录并重算得分。"""
+    """把一次探测结果并入时序记录；Google 自判国家优先，物理国家仅作辅助。"""
     now = now_iso()
-    baseline_ip = rec.get("baselineIp") or (node or {}).get("ip") or ""
-    baseline_cc = rec.get("baselineCountry") or (node or {}).get("countryCode") or ""
+    google_country = (probe.get("google_country") or "").strip().upper()
+    physical_country = (probe.get("country") or "").strip().upper()
+    baseline_ip = rec.get("baselineIp") or ""
+    baseline_cc = rec.get("baselineGoogleCountry") or rec.get("baselineCountry") or ""
+    if not baseline_ip:
+        baseline_ip = (node or {}).get("ip") or ""
+    if baseline_ip and not rec.get("baselineIp"):
+        rec["baselineIp"] = baseline_ip
+    if not baseline_cc:
+        baseline_cc = ((node or {}).get("googleCountry") or (node or {}).get("countryCode") or "").strip().upper()
+    if baseline_cc and not rec.get("baselineCountry"):
+        rec["baselineCountry"] = baseline_cc
 
     rec.setdefault("samples", [])
     rec.setdefault("driftEvents", [])
@@ -235,34 +269,58 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
         rec["consecutiveFailures"] = 0
         rec["offline"] = False
         rec["lastProbe"] = {"t": now, "ok": True, "ip": probe["ip"],
-                            "country": probe["country"]}
+                            "country": probe["country"],
+                            "googleCountry": probe.get("google_country") or "FAIL"}
         if probe["latency_ms"] > 0:
             rec["samples"].append({"t": now, "latency_ms": probe["latency_ms"]})
             rec["samples"] = rec["samples"][-MAX_SAMPLES:]
 
         # 漂移检测：与基线（首次见到的稳定 IP / 测绘 IP）比对
         current_ip = probe["ip"]
+        effective_cc = google_country if google_country not in ("", "FAIL", "UNKNOWN") else physical_country
         if not baseline_ip:
-            baseline_ip, baseline_cc = current_ip, probe["country"]
+            baseline_ip = current_ip
+            rec["baselineIp"] = current_ip
+        if not rec.get("baselineCountry") and baseline_cc:
+            rec["baselineCountry"] = baseline_cc
+        if not rec.get("baselineGoogleCountry") and google_country not in ("", "FAIL", "UNKNOWN"):
+            rec["baselineGoogleCountry"] = google_country
+        if not rec.get("baselinePhysicalCountry") and physical_country:
+            rec["baselinePhysicalCountry"] = physical_country
+        if not rec.get("stableSince"):
+            rec["stableSince"] = now
         if current_ip != baseline_ip:
-            drift = classify_drift(baseline_cc, probe["country"])
+            drift = classify_drift(baseline_cc, effective_cc)
+            if drift == "unknown":
+                rec.setdefault("driftEvents", []).append({"t": now, "from": baseline_ip, "to": current_ip,
+                    "kind": "unknown", "fromCc": baseline_cc, "toCc": effective_cc})
+                rec["driftEvents"] = rec["driftEvents"][-20:]
+                rec["lastDriftUnknown"] = True
+            else:
+                rec["lastDriftUnknown"] = False
             event = {"t": now, "from": baseline_ip, "to": current_ip,
-                     "kind": drift, "fromCc": baseline_cc, "toCc": probe["country"]}
+                     "kind": drift, "fromCc": baseline_cc, "toCc": effective_cc}
             rec["driftEvents"].append(event)
             rec["driftEvents"] = rec["driftEvents"][-20:]
             if drift == "same_country":
                 rec["driftPenalty"] = 10
-                rec["stableSince"] = now           # 轻微漂移：观察钟重置但不清零
+                rec["stableSince"] = now
             elif drift == "cross_country_same_region":
                 rec["driftPenalty"] = 30
                 rec["stableSince"] = now
-            else:
-                # 洲际漂移：一票否决 + 7 天禁用；基线随之平移（解禁后从新出口重新计时）
+            elif drift == "cross_continent":
                 rec["vetoUntil"] = (dt.datetime.now(dt.timezone.utc)
                                     + dt.timedelta(days=VETO_BAN_DAYS)).isoformat(timespec="seconds")
                 rec["stableSince"] = now
                 rec["driftPenalty"] = 0
-            rec["baselineIp"], rec["baselineCountry"] = current_ip, probe["country"]
+            # unknown 只记录证据，不触发跨洲禁用，也不改变有效国家基线。
+            if drift != "unknown":
+                rec["baselineIp"] = current_ip
+                rec["baselineCountry"] = effective_cc or baseline_cc
+                if google_country not in ("", "FAIL", "UNKNOWN"):
+                    rec["baselineGoogleCountry"] = google_country
+                if physical_country:
+                    rec["baselinePhysicalCountry"] = physical_country
         else:
             # 出口回归基线，遗留扣分随稳定时长线性衰减（48h 清零）
             hours = hours_since(rec.get("stableSince")) or 0.0
