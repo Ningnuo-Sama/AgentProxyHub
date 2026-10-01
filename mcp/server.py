@@ -847,6 +847,18 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
 
 
+def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
+    """读取已批准的模型路由策略；仅读，不切换客户端或外部模型。"""
+    policy_file = os.path.join(CONFIG_DIR, "model_policy.json")
+    try:
+        with open(policy_file, "r", encoding="utf-8-sig") as handle:
+            policy = json.load(handle)
+        return {"ok": True, "policy": policy, "manual_control_required": True,
+                "paid_calls": False, "bindings_changed": False}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "code": "model_policy_unavailable", "error": str(exc)[:160], "recoverable": True}
+
+
 def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取本机已登记渠道的低风险健康状态；不生成、不扣费、不读取明文凭据。"""
     import urllib.request
@@ -929,6 +941,12 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "model_policy",
+        "description": "读取正式模型路由策略：日常 Gemini 3.8 Flash Tiered，最高事态由当前 Harness 使用 gpt-6.1-sol；只读不自动切换",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_model_policy
+    },
     {
         "name": "channel_health",
         "description": "检查 Gemini、Flow-Tools、OpenViking、鲸管家等本地渠道；外部 Kie/AICost/GLM 仅标记配置状态，不发生成或付费请求",

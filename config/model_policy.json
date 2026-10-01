@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "daily": {
+    "model": "gemini-3.8-flash-tiered",
+    "provider": "antigravity",
+    "base_url": "http://127.0.0.1:8045",
+    "purpose": "日常对话与常规工程任务"
+  },
+  "highest_urgency": {
+    "model": "gpt-6.1-sol",
+    "provider": "harness",
+    "purpose": "最高事态；由当前 Agent/Harness 处理，不由本地 Gemini 网关冒充"
+  },
+  "fallback": {
+    "model": "gemini-3.8-flash-low",
+    "provider": "antigravity",
+    "purpose": "日常模型不可用时的本地降级"
+  },
+  "routing": {
+    "manual_control_required": true,
+    "auto_upgrade_to_highest": false,
+    "auto_paid_generation": false
+  },
+  "evidence": {
+    "gemini_model_list_verified": true,
+    "gemini_tiered_model": "gemini-3.8-flash-tiered",
+    "highest_urgency_runtime_managed": true
+  }
+}
