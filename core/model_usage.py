@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Callable
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
@@ -40,6 +40,25 @@ def record_usage(provider: str, model: str, *, status: str = "unknown", input_to
     return {"ok": True, "recorded": True, "file": str(USAGE_FILE), "row": row}
 
 
+def record_response_usage(provider: str, model: str, response: Any, *, status: str = "ok", request_id: str | None = None) -> dict[str, Any]:
+    """Extract common OpenAI-compatible usage fields without retaining response content."""
+    usage = response.get("usage", {}) if isinstance(response, dict) else getattr(response, "usage", {})
+    if usage is None:
+        usage = {}
+    def value(*names: str) -> int:
+        for name in names:
+            if isinstance(usage, dict) and usage.get(name) is not None:
+                return int(usage[name] or 0)
+            item = getattr(usage, name, None)
+            if item is not None:
+                return int(item or 0)
+        return 0
+    return record_usage(provider, model, status=status,
+                        input_tokens=value("prompt_tokens", "input_tokens"),
+                        output_tokens=value("completion_tokens", "output_tokens"),
+                        total_tokens=value("total_tokens"), request_id=request_id)
+
+
 def usage_summary() -> dict[str, Any]:
     totals: dict[str, dict[str, float]] = {}
     count = 0
@@ -58,4 +77,4 @@ def usage_summary() -> dict[str, Any]:
     return {"ok": True, "count": count, "by_model": totals, "file": str(USAGE_FILE), "secrets_logged": False}
 
 
-__all__ = ["USAGE_FILE", "record_usage", "usage_summary"]
+__all__ = ["USAGE_FILE", "record_usage", "record_response_usage", "usage_summary"]
