@@ -171,6 +171,8 @@
 
 - 按用户确认清理Antigravity无真实账号绑定：先备份gui_config.json至C:\Users\1\.antigravity_tools\gui_config.json.bak-20261003-034831-before-remove-missing，再移除两条无账号映射（原代理ID对应21022/21012）；保留6条真实邮箱账号绑定。EVA适配层重启后/api/driver-cards与浏览器均实测6卡、6个真实邮箱，80测试通过。未删除账号文件或凭据，仅修改绑定账本。
 
+- EVA自动同步收口：机体卡片与总额度卡均设置15秒刷新；卡片按/api/driver-cards真实绑定数量自动增删，当前6个真实邮箱/6卡；额度按Antigravity quota_groups与模型字段填充。页面运行态实测6卡、6邮箱，Gemini54.9%、Claude77.7%；Python编译与80项测试通过。EVA仍只读同步，不代替Antigravity登录或创建绑定。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
