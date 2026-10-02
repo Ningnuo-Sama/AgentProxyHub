@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # EVA H5 本地适配层：只在 loopback 提供脱敏状态和已登记任务，不暴露凭据。
-import json, os, sys, urllib.request, time
+import json, os, sys, urllib.request, time, sqlite3
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +31,9 @@ LOG_SOURCES = {
     'hermes_watchdog': Path(r'D:\Program Files (x86)\hermes\logs\gateway-watchdog.log'),
     'usage': Path(r'D:\Program Files\AgentProxyHub\data\model_usage.jsonl'),
     'autonomy': Path(r'D:\Program Files\AgentProxyHub\data\autonomy_events.jsonl'),
+    'antigravity_app': Path(r'C:\Users\1\.antigravity_tools\logs\app.log.2026-10-02'),
 }
+ANTIGRAVITY_DB = Path(r'C:\Users\1\.antigravity_tools\proxy_logs.db')
 
 def read_log_source(name, limit=80):
     path = LOG_SOURCES.get(name)
@@ -41,6 +43,22 @@ def read_log_source(name, limit=80):
         return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]}
     except OSError as exc:
         return {'name': name, 'available': False, 'error': type(exc).__name__, 'lines': []}
+
+def read_antigravity_request_logs(limit=100):
+    if not ANTIGRAVITY_DB.exists(): return {'name': 'antigravity_requests', 'available': False, 'lines': []}
+    try:
+        conn = sqlite3.connect(f'file:{ANTIGRAVITY_DB}?mode=ro', uri=True, timeout=1)
+        rows = conn.execute('SELECT timestamp, method, url, status, duration, model, error FROM request_logs ORDER BY timestamp DESC LIMIT ?', (max(1, min(int(limit), 200)),)).fetchall()
+        conn.close()
+        lines = []
+        for timestamp, method, url, status, duration, model, error in reversed(rows):
+            when = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime((timestamp or 0) / 1000))
+            target = url.split('?', 1)[0] if url else '-'
+            lines.append(f'{when} | {method or "-"} | {model or "-"} | HTTP {status if status is not None else "-"} | {duration or 0}ms | {target}{" | ERROR: " + error if error else ""}')
+        return {'name': 'antigravity_requests', 'available': True, 'path': str(ANTIGRAVITY_DB), 'lines': lines}
+    except (OSError, sqlite3.Error):
+        return {'name': 'antigravity_requests', 'available': False, 'lines': []}
+
 
 def read_driver_cards():
     bindings = tool_get_profile_bindings({})
@@ -203,8 +221,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/autonomy': return self.send_json(200, tool_autonomy_action({'action':'status'}))
         if path == '/api/logs':
             query = parse_qs(urlparse(self.path).query)
-            names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or list(LOG_SOURCES)
-            return self.send_json(200, {'ok': True, 'sources': [read_log_source(name, 100) for name in names]})
+            names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or [*LOG_SOURCES, 'antigravity_requests']
+            sources = [read_antigravity_request_logs(100) if name == 'antigravity_requests' else read_log_source(name, 100) for name in names]
+            return self.send_json(200, {'ok': True, 'sources': sources})
         if path == '/api/usage':
             from core.model_usage import usage_summary
             return self.send_json(200, usage_summary())
