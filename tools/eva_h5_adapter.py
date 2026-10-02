@@ -77,16 +77,36 @@ def mihomo_put(path, payload, timeout=8):
         body = response.read().decode('utf-8', 'replace')
         return json.loads(body) if body else {'ok': True}
 
+_gateway_sample = None
+_gateway_sample_at = 0.0
+_delay_cache = {}
+
 def _bytes_per_second(now, previous, interval):
-    if not previous or interval <= 0: return 0
+    if previous is None or interval <= 0: return 0
     return max(0, now - previous) / interval
 
-def read_gateway_state():
+def read_node_delay(node, timeout=2500):
+    now = time.time()
+    cached = _delay_cache.get(str(node))
+    if cached and now - cached.get('_at', 0) < 5:
+        return {k: v for k, v in cached.items() if k != '_at'}
+    target = quote(str(node), safe='')
+    path = f'/proxies/{target}/delay?timeout={int(timeout)}&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204'
+    try:
+        result = mihomo_get(path, timeout=max(4, timeout / 1000 + 2))
+        value = {'ok': True, 'node': node, 'delay_ms': result.get('delay'), 'source': 'mihomo_delay', '_at': now}
+    except Exception as exc:
+        value = {'ok': False, 'node': node, 'delay_ms': None, 'source': 'mihomo_delay', 'error': type(exc).__name__, '_at': now}
+    _delay_cache[str(node)] = value
+    return {k: v for k, v in value.items() if k != '_at'}
+
+def read_gateway_state(include_delay=False):
     try:
         proxies = mihomo_get('/proxies').get('proxies', {})
         connections = mihomo_get('/connections')
         active = []
-        overseas = direct = {'upload': 0, 'download': 0, 'connections': 0}
+        overseas = {'upload': 0, 'download': 0, 'connections': 0}
+        direct = {'upload': 0, 'download': 0, 'connections': 0}
         for c in connections.get('connections', []):
             meta = c.get('metadata') or {}
             chain = ' '.join(c.get('chains') or [])
@@ -95,7 +115,17 @@ def read_gateway_state():
             bucket = direct if chain.upper() == 'DIRECT' or not chain else overseas
             bucket['upload'] += row['upload']; bucket['download'] += row['download']; bucket['connections'] += 1
         groups = [{'name': n, 'type': v.get('type'), 'now': v.get('now'), 'alive': v.get('alive'), 'all_count': len(v.get('all', []))} for n,v in proxies.items() if v.get('type') in ('Selector','URLTest','Fallback','LoadBalance')]
-        return {'ok': True, 'source': MIHOMO_CONTROLLER, 'groups': groups, 'traffic': {'total': {'upload': connections.get('uploadTotal', 0), 'download': connections.get('downloadTotal', 0)}, 'overseas': overseas, 'direct': direct}, 'connections': active, 'generated_at': time.time()}
+        for group in groups:
+            if include_delay and group.get('now'):
+                group['delay'] = read_node_delay(group['now'])
+        global _gateway_sample, _gateway_sample_at
+        now = time.time()
+        interval = now - _gateway_sample_at if _gateway_sample_at else 0
+        previous = _gateway_sample or {'overseas': {'upload': 0, 'download': 0}, 'direct': {'upload': 0, 'download': 0}}
+        rates = {'overseas': {'upload': _bytes_per_second(overseas['upload'], previous['overseas']['upload'], interval), 'download': _bytes_per_second(overseas['download'], previous['overseas']['download'], interval)}, 'direct': {'upload': _bytes_per_second(direct['upload'], previous['direct']['upload'], interval), 'download': _bytes_per_second(direct['download'], previous['direct']['download'], interval)}}
+        _gateway_sample = {'overseas': overseas.copy(), 'direct': direct.copy()}
+        _gateway_sample_at = now
+        return {'ok': True, 'source': MIHOMO_CONTROLLER, 'groups': groups, 'traffic': {'total': {'upload': connections.get('uploadTotal', 0), 'download': connections.get('downloadTotal', 0)}, 'overseas': overseas, 'direct': direct, 'rates_bps': rates, 'sample_interval_s': interval}, 'connections': active, 'generated_at': now}
     except Exception as exc:
         return {'ok': False, 'source': MIHOMO_CONTROLLER, 'error': type(exc).__name__, 'traffic': {'total': {}, 'overseas': {}, 'direct': {}}, 'groups': [], 'connections': []}
 
@@ -128,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/audit': return self.send_json(200, {'ok': True, 'result': tool_jingguanjia_orphan({'action':'audit_log','limit':30})})
         if path == '/api/models': return self.send_json(200, model_status())
         if path == '/api/health': return self.send_json(200, tool_channel_health({}))
-        if path == '/api/gateway': return self.send_json(200, read_gateway_state())
+        if path == '/api/gateway': return self.send_json(200, read_gateway_state(include_delay=True))
         if path == '/api/snapshot':
             health = tool_channel_health({})
             autonomy = tool_autonomy_action({'action':'status'})
