@@ -5,12 +5,12 @@ import subprocess
 import threading
 from pathlib import Path
 
-# 仅覆盖同一适配器进程内的 start/stop 竞态；跨进程互斥仍需特权服务侧实现。
-_CONTROL_LOCK = threading.RLock()
+# 只覆盖遵守此协议的调用方；直接PowerShell启停不自动受到保护。
+from .process_control_lock import process_control_lock
 
 
 def control_lock():
-    return _CONTROL_LOCK
+    return process_control_lock()
 
 
 HALT_FILE = Path(r'D:\ProgramData\AgentProxyHub\control\manual-halt.json')
