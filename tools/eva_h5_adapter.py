@@ -116,7 +116,8 @@ def read_gateway_state(include_delay=False):
             bucket['upload'] += row['upload']; bucket['download'] += row['download']; bucket['connections'] += 1
         groups = [{'name': n, 'type': v.get('type'), 'now': v.get('now'), 'alive': v.get('alive'), 'all_count': len(v.get('all', []))} for n,v in proxies.items() if v.get('type') in ('Selector','URLTest','Fallback','LoadBalance')]
         for group in groups:
-            if include_delay and group.get('now'):
+            # 出海卡只需要 AUTO-POOL 的真实出口延迟；不要顺序探测 ALL/GLOBAL，避免前端刷新被多个探测拖慢。
+            if include_delay and group.get('name') == 'AUTO-POOL' and group.get('now'):
                 group['delay'] = read_node_delay(group['now'])
         global _gateway_sample, _gateway_sample_at
         now = time.time()
