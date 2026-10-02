@@ -46,6 +46,12 @@ def build_candidate(config: Mapping[str, Any]) -> dict[str, Any]:
     groups = candidate.setdefault("proxy-groups", [])
     groups[:] = [g for g in groups if g.get("name") != PERSONAL_GROUP]
     groups.append({"name": PERSONAL_GROUP, "type": "select", "proxies": ["AUTO-POOL", "DIRECT"]})
+    # TUN must use remote DNS for overseas domains; domestic rules remain DIRECT.
+    dns = candidate.setdefault("dns", {})
+    dns.update({"enable": True, "enhanced-mode": "fake-ip", "fake-ip-filter": ["+.*.cn", "+.lan", "+.local"]})
+    dns["nameserver"] = ["https://223.5.5.5/dns-query", "https://doh.pub/dns-query"]
+    dns["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query"]
+    dns["fallback"] = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
     candidate["mode"] = "rule"
     # PyYAML YAML1.1 将原配置未加引号的 off 读成 False；内核需要枚举字符串。
     if candidate.get("find-process-mode") is False:

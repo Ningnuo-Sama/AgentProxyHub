@@ -101,6 +101,8 @@
 
 - 2026-10-03 DNS差异诊断：新增只读 `tools/google_dns_diagnostic.py`，精确传curl参数、禁用环境代理，21012完整TLS+Google204连续两次成功（远端域名解析）；同端口本机DNS解析模式连续两次TLS超时。证明DNS解析路径差异是当前Google失败的具体候选根因，不再把SOCKS握手称作HTTPS验证。未改配置/重启内核，live TUN=false；全套54测试通过。
 
+- 续轮22针对已证实DNS差异，在PERSONAL候选中加入fake-ip、国内过滤、DoH nameserver/proxy-server-nameserver及fallback；正式mihomo `-t`通过，全套54测试通过。仅写入ProgramData候选，未加载现役，需下一轮单实例实测Google并回退。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
