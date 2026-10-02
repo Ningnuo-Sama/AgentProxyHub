@@ -403,6 +403,7 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
     profile = str(args.get("profile") or "").strip()
     country = str(args.get("country") or "").strip().upper()
     scene = str(args.get("scene") or "general").strip().lower()
+    region = str(args.get("region") or "").strip().upper()
     dry_run = bool(args.get("dry_run", False))
     if not profile:
         return {"success": False, "code": "profile_required", "bindings_changed": False}
@@ -411,8 +412,13 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
         switches = AutonomyState().load()["switches"]
         if not switches.get("auto_rebind_enabled"):
             return {"success": False, "code": "auto_rebind_disabled", "bindings_changed": False}
-        candidates = tool_list_matched_proxies({"scene": scene, "country": country, "min_rating": args.get("min_rating", "B"), "limit": 20})
+        candidates = tool_list_matched_proxies({"scene": scene, "country": country, "min_rating": args.get("min_rating", "C"), "limit": 125})
         rows = [row for row in candidates.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked") and row.get("ready")]
+        if region:
+            from core.autonomy_core import RoutePolicy
+            regional = [row for row in rows if RoutePolicy.region(row.get("country") or row.get("countryCode")) == region]
+            if regional:
+                rows = regional
         if not rows and not country and scene == "general":
             fallback = tool_list_matched_proxies({"scene": "general", "country": "", "min_rating": "F", "limit": 125})
             rows = [row for row in fallback.get("results", []) if row.get("port_open") and not row.get("runtime_vetoed") and not row.get("is_locked") and row.get("ready")]
@@ -1336,7 +1342,7 @@ TOOLS = [
     {
         "name": "auto_rebind_profile",
         "description": "Agent 自动选择健康出口并迁移环境绑定；需显式开启 auto_rebind_enabled，不调用付费服务",
-        "inputSchema": {"type": "object", "properties": {"profile": {"type": "string"}, "country": {"type": "string"}, "scene": {"type": "string"}, "min_rating": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["profile"]},
+        "inputSchema": {"type": "object", "properties": {"profile": {"type": "string"}, "country": {"type": "string"}, "region": {"type": "string", "description": "优先同大区，例如 NA/EU/EA/SEA"}, "scene": {"type": "string"}, "min_rating": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["profile"]},
         "handler": tool_auto_rebind_profile
     },
     {

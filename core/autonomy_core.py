@@ -157,21 +157,36 @@ class AutonomyState:
 
 
 class RoutePolicy:
-    """只做安全路由建议：优先同国家、健康且未 veto 的节点。"""
+    """自治路由：同国优先，其次同大区，再按健康/置信度；veto 永不绕过。"""
+
+    REGION_MAP = {
+        "US": "NA", "CA": "NA", "MX": "NA",
+        "GB": "EU", "FR": "EU", "DE": "EU", "IT": "EU", "ES": "EU", "NL": "EU", "CH": "EU", "DK": "EU",
+        "JP": "EA", "KR": "EA", "TW": "EA", "HK": "EA", "MO": "EA", "CN": "EA", "SG": "SEA", "MY": "SEA", "ID": "SEA", "TH": "SEA",
+        "AU": "OC", "NZ": "OC",
+    }
 
     def __init__(self, state: AutonomyState | None = None):
         self.state = state or AutonomyState()
 
-    def route(self, candidates: Iterable[Mapping[str, Any]], *, country: str = "") -> dict[str, Any]:
+    @classmethod
+    def region(cls, country: str) -> str:
+        return cls.REGION_MAP.get(str(country or "").upper().strip(), "UNKNOWN")
+
+    def route(self, candidates: Iterable[Mapping[str, Any]], *, country: str = "", region: str = "") -> dict[str, Any]:
         if not self.state.load()["switches"]["routing_enabled"]:
             return {"ok": False, "reason": "routing_disabled", "candidate": None}
         wanted = country.upper().strip()
+        wanted_region = str(region or self.region(wanted)).upper()
         available = [dict(c) for c in candidates if c.get("port") and not c.get("vetoed") and c.get("health", "UNKNOWN") not in {"DOWN", "FAIL"}]
-        if wanted:
-            same = [c for c in available if str(c.get("country") or c.get("countryCode") or "").upper() == wanted]
-            available = same or available
-        available.sort(key=lambda c: (c.get("country") != wanted, -(float(c.get("score") or c.get("confidence") or 0))))
-        return {"ok": bool(available), "reason": "selected" if available else "no_candidate", "candidate": available[0] if available else None}
+        def cc(item: Mapping[str, Any]) -> str:
+            return str(item.get("country") or item.get("countryCode") or "").upper().strip()
+        same_country = [c for c in available if wanted and cc(c) == wanted]
+        same_region = [c for c in available if wanted_region != "UNKNOWN" and self.region(cc(c)) == wanted_region]
+        pool = same_country or same_region or available
+        pool.sort(key=lambda c: (-(float(c.get("score") or c.get("confidence") or 0)), str(c.get("port"))))
+        reason = "same_country" if same_country else ("same_region" if same_region else ("best_available" if pool else "no_candidate"))
+        return {"ok": bool(pool), "reason": reason, "region": wanted_region, "candidate": pool[0] if pool else None}
 
 
 class DownloadGuard:
