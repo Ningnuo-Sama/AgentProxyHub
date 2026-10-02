@@ -4,6 +4,7 @@ import socket
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from core.resident_engineer import ALLOWED_ACTIONS, ResidentEngineer
@@ -39,6 +40,19 @@ class ResidentEngineerTests(unittest.TestCase):
             denied = e.dispatch("run_shell", {})
             self.assertEqual(denied["code"], "action_not_allowed")
             self.assertTrue(denied["recoverable"])
+
+    def test_recovery_rejects_second_owned_kernel(self):
+        with tempfile.TemporaryDirectory() as folder:
+            e = ResidentEngineer(Path(folder) / 'state.json')
+            runner = Path(folder) / 'silent-run.bat'
+            runner.write_text('@echo off', encoding='utf-8')
+            with unittest.mock.patch.object(e, 'health_check', return_value={'ok': False, 'ports': []}), \
+                 unittest.mock.patch('core.resident_engineer.subprocess.run') as run, \
+                 unittest.mock.patch('core.resident_engineer.subprocess.Popen') as popen:
+                run.return_value = unittest.mock.Mock(returncode=0, stdout='1')
+                result = e.recover_mihomo(runner=str(runner), ports=[])
+            self.assertEqual(result['code'], 'owned_kernel_already_running')
+            popen.assert_not_called()
 
     def test_state_persists_and_failure_is_recoverable(self):
         with tempfile.TemporaryDirectory() as folder:

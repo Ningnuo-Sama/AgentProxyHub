@@ -136,6 +136,17 @@ class ResidentEngineer:
             return {"ok": True, "action": "already_running", "before": before, "after": before,
                     "paid_calls": False, "bindings_changed": False}
         try:
+            from core.kernel_control import OWNED_EXE
+            # 恢复前禁止任意runner拉起第二个内核；runner必须是已知APH入口。
+            existing = subprocess.run(
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                 "@(Get-CimInstance Win32_Process -Filter \"Name='mihomo.exe'\" | Where-Object {$_.ExecutablePath -eq '" + OWNED_EXE + "'}).Count"],
+                capture_output=True, text=True, timeout=5)
+            if existing.returncode == 0 and existing.stdout.strip() not in ('', '0'):
+                return {"ok": False, "code": "owned_kernel_already_running", "recoverable": False,
+                        "before": before, "after": before}
+            if runner_path.name.lower() not in ('silent-run.bat', '启动agentproxyhub.bat'):
+                return {"ok": False, "code": "runner_not_allowlisted", "recoverable": False}
             subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent),
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError as exc:
