@@ -177,6 +177,8 @@
 
 - 日志筛选反馈修复：ERRORS按钮筛掉正常[MAINT]日志时，原页面为空白且新日志仍不可见；现增加当前筛选状态、实时新日志按筛选条件显示，以及无错误时的明确提示“当前暂无错误日志 · 切换 ALL 查看正常运行日志”。浏览器实测ERRORS下提示出现；ALL仍显示真实滚动日志。
 
+- 日志拓扑盘点与补接：原统一接口只有mihomo bridge、Hermes、Hermes watchdog、AgentProxyHub usage/autonomy五类文本源；发现未接入的Antigravity请求数据库C:\Users\1\.antigravity_tools\proxy_logs.db（request_logs表，约2GB）。新增只读antigravity_requests源，输出时间/方法/模型/HTTP状态/耗时/URL/错误，不读取request_body、token或响应正文；EVA自动日志现在实测包含该源，约510行合并展示。Flow-Tools源码未发现独立正式日志文件，Hermes缓存/数据库未纳入，避免把临时缓存当项目业务日志。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
