@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # EVA H5 本地适配层：只在 loopback 提供脱敏状态和已登记任务，不暴露凭据。
-import json, os, sys, urllib.request, time, sqlite3
+import json, os, sys, urllib.request, time, sqlite3, re
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +35,30 @@ LOG_SOURCES = {
 }
 ANTIGRAVITY_DB = Path(r'C:\Users\1\.antigravity_tools\proxy_logs.db')
 FLOW_TASK_LOG = Path(r'C:\Users\1\AppData\Local\FlowTools\task-logs.json')
+
+def clean_log_line(source, line):
+    source = source.get('name', '') if isinstance(source, dict) else source
+    text = str(line).replace('\r', ' ').replace('\n', ' ')
+    if source == 'flow_tasks':
+        parts = [p.strip() for p in text.split('|')]
+        if len(parts) >= 7:
+            _, account, operation, model, status, duration, via = parts[:7]
+            action = {'image_generation': '生成图片', 'image_generation_chat': '生成图片', 'image_edit': '编辑图片', 'video_generation_chat': '生成视频', 'video_generation': '生成视频'}.get(operation, operation)
+            return f'{account} {action} · {model} · {"成功" if status == "success" else "失败"} · {duration} · {via}'
+    if source == 'antigravity_requests':
+        parts = [p.strip() for p in text.split('|')]
+        if len(parts) >= 6:
+            when, method, model, status, duration, target = parts[:6]
+            code = re.search(r'HTTP\s+(\d+)', status)
+            return f'{model} 请求 · {"成功" if code and code.group(1).startswith("2") else "失败"} · {status} · {duration}'
+    text = re.sub(r'^time="([^"]+)"\s+level=\w+\s+msg="(.+)"$', r'\1 · \2', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:500]
+
+
+def clean_log_source(source):
+    return [clean_log_line(source.get('name', ''), line) for line in source.get('lines', [])]
+
 
 def read_log_source(name, limit=80):
     path = LOG_SOURCES.get(name)
@@ -237,6 +261,8 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or [*LOG_SOURCES, 'flow_tasks', 'antigravity_requests']
             sources = [read_flow_task_logs(100) if name == 'flow_tasks' else (read_antigravity_request_logs(100) if name == 'antigravity_requests' else read_log_source(name, 100)) for name in names]
+            for source in sources:
+                source['lines'] = clean_log_source(source)
             return self.send_json(200, {'ok': True, 'sources': sources})
         if path == '/api/usage':
             from core.model_usage import usage_summary
