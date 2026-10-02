@@ -144,7 +144,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         origin = self.headers.get('Origin', '')
-        allowed_origin = origin if origin in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121'} else 'http://127.0.0.1:8768'
+        # EVA 也可能从本地 file:// 打开，此时浏览器 Origin 为 null；回显 null 以允许只读 loopback API，其他来源仍拒绝。
+        allowed_origin = origin if origin in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121', 'null'} else 'http://127.0.0.1:8768'
         self.send_header('Access-Control-Allow-Origin', allowed_origin)
         self.send_header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
