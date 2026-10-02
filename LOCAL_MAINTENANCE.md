@@ -127,6 +127,8 @@
 
 - 双内核TUN首次受控实测：verify_isolated_tun有界刷新节点/DNS/既有连接，共12排除地址；个人开启TUN时系统Google204与显式21012远端解析Google204均成功，各现场端点Find-NetRoute保持WLAN；finally仅停止个人，个人网卡/路由均0，业务PID20788及创建时间不变、125端口全通、业务TUN=false。初次JSON单元素类型导致启动前拒绝，修复后完成演练。73回归通过。随后收紧工具退出判据并py_compile通过，未重跑改后版本；非全账号/UDP/Gemini流式/抓包验收，不能声称全量无干扰。
 
+- 双内核复验：演练配置改唯一文件名、增既有连接身份统计，收紧双HTTPS/物理路由/个人撤销退出门禁版本真实返回0；业务PID不变、个人网卡/路由0、系统及21012 Google204成功。35条既有连接开启期间保持32、退出后保持9，可能自然结束但未证明，不能据exit0声称长连接/Gemini无干扰。追加明确gemini_noninterference_verified=false及全连接保持布尔，py_compile/73测试通过（追加标识未再实跑）；业务TUN=false。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

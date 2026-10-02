@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.business_route_exclusions import endpoint_hosts, dns_endpoint_hosts, apply_exclusions
@@ -37,6 +38,12 @@ def business_identity():
     return value if isinstance(value, list) else ([value] if value else [])
 
 
+def connections(pid):
+    value = ps(f"@(Get-NetTCPConnection -OwningProcess {pid} -State Established -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,CreationTime) | ConvertTo-Json -Compress")
+    rows = value if isinstance(value, list) else ([value] if value else [])
+    return {tuple(str(row.get(key)) for key in ('LocalAddress','LocalPort','RemoteAddress','RemotePort','CreationTime')) for row in rows}
+
+
 def main():
     if is_halted() or TunController().status().get('tun_enabled') is not False:
         raise RuntimeError('unsafe_baseline')
@@ -57,7 +64,7 @@ def main():
     active = ps(f"@(Get-NetTCPConnection -OwningProcess {pid} -State Established -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RemoteAddress -Unique) | ConvertTo-Json -Compress") or []
     c, evidence = apply_exclusions(build_isolated_candidate(b), b, resolved, active_addresses=active)
     c['tun']['enable'] = True
-    config = Path(r'D:\Program Files\AgentProxyHub\personal\test-active.yaml')
+    config = Path(r'D:\Program Files\AgentProxyHub\personal') / ('test-active-' + uuid.uuid4().hex + '.yaml')
     if config.exists():
         raise RuntimeError('existing_test_config_requires_review')
     config.write_text(yaml.safe_dump(c,allow_unicode=True,sort_keys=False), encoding='utf-8')
@@ -68,6 +75,8 @@ def main():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     if checked.returncode:
         raise RuntimeError('candidate_invalid')
+    existing_connections = connections(pid)
+    result['existing_connections_before'] = len(existing_connections)
     try:
         with control_lock():
             if is_halted(): raise RuntimeError('manual_halt')
@@ -79,6 +88,7 @@ def main():
         result['personal'] = TunController(config).status()
         result['socks_during'] = probe(True)
         result['system_during'] = probe()
+        result['existing_connections_retained_during'] = len(existing_connections & connections(pid))
         addresses = sorted({v for values in resolved.values() for v in values} | {a for a in active if not ipaddress.ip_address(a).is_loopback} | {'223.5.5.5'})
         routes = []
         for address in addresses:
@@ -92,12 +102,18 @@ def main():
         result['business_unchanged'] = result['business_after'] == before
         result['personal_adapters_after'] = ps("@(Get-NetAdapter | Where-Object Name -eq 'APH-Personal').Count | ConvertTo-Json")
         result['personal_routes_after'] = ps("@(Get-NetRoute | Where-Object InterfaceAlias -eq 'APH-Personal').Count | ConvertTo-Json")
-        print(json.dumps(result, ensure_ascii=False))
+        result['existing_connections_retained_after'] = len(existing_connections & connections(pid))
     physical = b['interface-name']
     result['endpoint_routes_physical'] = all(
         item['routes'] and all(row.get('InterfaceAlias') == physical for row in
                               (item['routes'] if isinstance(item['routes'], list) else [item['routes']]))
         for item in result.get('endpoint_routes', []))
+    result['all_existing_connections_retained'] = (
+        result['existing_connections_before'] > 0 and
+        result['existing_connections_retained_during'] == result['existing_connections_before'] and
+        result['existing_connections_retained_after'] == result['existing_connections_before'])
+    result['gemini_noninterference_verified'] = False
+    print(json.dumps(result, ensure_ascii=False))
     # 退出码仅代表这组有限双探针，不是Gemini/UDP或全量上线验收。
     return 0 if (result.get('system_during', {}).get('ok') and
                  result.get('socks_during', {}).get('ok') and result['business_unchanged'] and
