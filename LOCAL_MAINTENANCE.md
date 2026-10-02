@@ -78,6 +78,8 @@
 
 - 续轮10看门狗runner新增启动前manual-halt短路：人工急停时直接输出respect_manual_halt并退出，不探测、不调用撤销、不复活内核；新增测试后全套52项通过。正式状态仍TUN关闭。
 
+- 续轮11新增只读验收工具 `tools/verify_tun_runtime.py`：同时读控制器、Meta网卡、198.18/路由、125端口及百度/Google；在正式TUN关闭时正确返回 `not_verified`/退出码2，实测百度200、Google超时、125端口全通。该工具不改配置、不启停内核。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
