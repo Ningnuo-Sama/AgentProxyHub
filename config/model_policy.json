@@ -28,9 +28,12 @@
     "purpose": "低成本业务判定与结构化审核"
   },
   "routing": {
-    "manual_control_required": true,
-    "auto_upgrade_to_highest": false,
-    "auto_paid_generation": false
+    "manual_control_required": false,
+    "auto_upgrade_to_highest": true,
+    "auto_paid_generation": false,
+    "media_handoff": "flow_tools",
+    "fallback_chain": ["gemini-3.8-flash-tiered", "glm-5.3-flash"],
+    "highest_urgency_model": "gpt-6.1-sol"
   },
   "evidence": {
     "gemini_model_list_verified": true,

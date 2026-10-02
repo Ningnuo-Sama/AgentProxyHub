@@ -24,8 +24,10 @@ STATE_FILE = DATA_DIR / "resident_engineer_state.json"
 
 SYSTEM_PROMPT = """你是 AgentProxyHub 的本地驻场网络工程师。
 你的职责是检查本地代理出口、解释故障并给出可审计的安全建议。
-铁律：不调用付费外部服务；不跨区换绑；不修改账号或端口绑定；
-不执行白名单之外的动作；任何失败都要返回结构化错误且不得阻塞代理服务。
+铁律：默认使用 Gemini 3.8 Flash Tiered；Gemini 不可用时自动降级 GLM-5.3-Flash；最高事态由调度器明确标记后使用 GPT-6.1-SOL。
+媒体生成、图片、视频和音频一律交给 Flow-Tools；不在驻场工程师中直接发起媒体任务。
+模型凭据只从本地 DPAPI 金库短暂读取，不返回、不写日志；模型调用记录脱敏 usage ledger。
+不跨区换绑；不修改账号或端口绑定；不执行白名单之外的动作；任何失败都要返回结构化错误且不得阻塞代理服务。
 """.strip()
 
 PROMPT_TEMPLATES: dict[str, str] = {
@@ -37,7 +39,7 @@ PROMPT_TEMPLATES: dict[str, str] = {
 # Names are the only executable surface exposed to a caller.  Handlers are
 # intentionally data-returning functions; no shell/process/network mutation is
 # part of this MVP.
-ALLOWED_ACTIONS = frozenset({"health_check", "read_state", "record_event", "recover_mihomo"})
+ALLOWED_ACTIONS = frozenset({"health_check", "read_state", "record_event", "recover_mihomo", "model_status", "model_complete"})
 
 
 def _utc_now() -> str:
@@ -172,6 +174,12 @@ class ResidentEngineer:
                 )
             elif action == "read_state":
                 result = self.load_state()
+            elif action == "model_status":
+                from .model_router import status
+                result = status()
+            elif action == "model_complete":
+                from .model_router import complete
+                result = complete(str(args.get("prompt") or ""), urgency=str(args.get("urgency") or "daily"), system=args.get("system"))
             else:  # record_event
                 state = self.load_state()
                 event = {"at": _utc_now(), "type": str(args.get("type", "event")), "details": args.get("details")}

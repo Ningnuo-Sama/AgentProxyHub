@@ -7,6 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault('APHUB_DATA_DIR', r'D:\Program Files\AgentProxyHub\data')
 from mcp.server import tool_jingguanjia_orphan, tool_get_profile_bindings
+from core.model_router import complete, status as model_status
 
 UPSTREAMS = {
     'flow': 'http://127.0.0.1:8001/health',
@@ -41,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {'ok': True, 'services': {k: probe(v) for k,v in UPSTREAMS.items()}, 'cliproxyapi': 'excluded'})
         if path == '/api/bindings': return self.send_json(200, {'ok': True, 'result': tool_get_profile_bindings({})})
         if path == '/api/audit': return self.send_json(200, {'ok': True, 'result': tool_jingguanjia_orphan({'action':'audit_log','limit':30})})
+        if path == '/api/models': return self.send_json(200, model_status())
         return self.send_json(404, {'ok': False, 'code': 'not_found'})
     def do_POST(self):
         path = urlparse(self.path).path
@@ -55,6 +57,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {'ok': True, 'status':'awaiting_final_user_confirmation', 'submitted':False})
         if path == '/api/wechat/prepare':
             return self.send_json(200, {'ok': True, 'target':'一帆', 'status':'prepared', 'sent':False})
+        if path == '/api/complete':
+            prompt = str(body.get('prompt') or '')
+            urgency = str(body.get('urgency') or 'daily')
+            if not prompt or len(prompt) > 12000: return self.send_json(400, {'ok': False, 'code':'invalid_prompt'})
+            if body.get('media'): return self.send_json(202, {'ok': True, 'handoff':'flow_tools', 'submitted':False})
+            return self.send_json(200, complete(prompt, urgency=urgency, system=body.get('system')))
         return self.send_json(404, {'ok': False, 'code': 'not_found'})
 
 if __name__ == '__main__':
