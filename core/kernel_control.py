@@ -2,7 +2,16 @@
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
+
+# 仅覆盖同一适配器进程内的 start/stop 竞态；跨进程互斥仍需特权服务侧实现。
+_CONTROL_LOCK = threading.RLock()
+
+
+def control_lock():
+    return _CONTROL_LOCK
+
 
 HALT_FILE = Path(r'D:\ProgramData\AgentProxyHub\control\manual-halt.json')
 OWNED_EXE = r'D:\Program Files\AgentProxyHub\bin\mihomo.exe'
@@ -24,7 +33,12 @@ def set_halt(enabled):
 
 
 def emergency_stop():
-    set_halt(True)
+    with control_lock():
+        set_halt(True)
+        return _emergency_stop_locked()
+
+
+def _emergency_stop_locked():
     # 白名单按 executable 精确匹配，绝不 taskkill /im mihomo.exe。
     command = r'''$ErrorActionPreference='Stop'
 $owned='D:\Program Files\AgentProxyHub\bin\mihomo.exe'

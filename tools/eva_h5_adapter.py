@@ -202,15 +202,24 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length', '0'))
         try: body = json.loads(self.rfile.read(length) or b'{}')
         except Exception: body = {}
-        if path == '/api/core/stop':
-            from core.kernel_control import emergency_stop
-            result = emergency_stop()
-            return self.send_json(200 if result['ok'] else 500, result)
-        if path == '/api/core/start':
-            from core.kernel_control import set_halt
-            set_halt(False)
-            result = tool_kernel_recovery({'ports': [21001, 21008, 22002, 21909]})
-            return self.send_json(200, result)
+        if path in {'/api/core/stop', '/api/core/start'}:
+            # Destructive lifecycle controls require a real trusted browser origin.
+            # Empty/`null` Origin is rejected to prevent file:///CSRF callers.
+            if origin not in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121'}:
+                return self.send_json(403, {'ok': False, 'code': 'trusted_http_origin_required'})
+            from core.kernel_control import control_lock, emergency_stop
+            with control_lock():
+                if path == '/api/core/stop':
+                    result = emergency_stop()
+                    return self.send_json(200 if result['ok'] else 500, result)
+                from core.kernel_control import set_halt
+                set_halt(False)
+                result = tool_kernel_recovery({'ports': [21001, 21008, 22002, 21909]})
+                # Failed manual start must restore the halt latch; otherwise a
+                # failed recovery silently re-enables autonomous revival.
+                if not result.get('ok', False):
+                    set_halt(True)
+                return self.send_json(200 if result.get('ok', False) else 500, result)
         if path == '/api/task':
             task = body.get('task')
             if task not in ALLOWED_TASKS: return self.send_json(403, {'ok': False, 'code':'task_not_allowed'})
