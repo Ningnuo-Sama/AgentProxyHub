@@ -22,6 +22,16 @@ def tcp_probe(host, port, timeout=2):
         return False
 
 
+def proxy_probe(controller):
+    """仅探测当前PERSONAL出口是否能建立HTTPS，不暴露响应内容。"""
+    try:
+        request = controller.opener.open('https://www.google.com/generate_204', timeout=6)
+        request.close()
+        return True
+    except Exception:
+        return False
+
+
 def collect(controller, baseline_ports):
     state = controller.status()
     enabled = state.get('tun_enabled')
@@ -42,7 +52,7 @@ def collect(controller, baseline_ports):
     except subprocess.TimeoutExpired:
         dns_ok = False
     return Evidence(bool(state.get('ok')), dns_ok, direct_ok,
-                    True, local_ok, True, halted), state
+                    proxy_probe(controller), local_ok, True, halted), state
 
 
 def main():

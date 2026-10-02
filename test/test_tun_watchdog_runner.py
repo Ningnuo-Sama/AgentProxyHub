@@ -23,6 +23,16 @@ class RunnerTest(unittest.TestCase):
         self.assertFalse(evidence.dns_ok)
         self.assertTrue(evidence.tun_enabled)
 
+    def test_proxy_probe_failure_is_evidence(self):
+        controller = Mock()
+        controller.status.return_value = {'ok': True, 'tun_enabled': True}
+        controller.opener.open.side_effect = OSError('offline')
+        with patch('tools.tun_watchdog_runner.is_halted', return_value=False), \
+             patch('tools.tun_watchdog_runner.tcp_probe', return_value=True), \
+             patch('subprocess.run', return_value=Mock(returncode=0)):
+            evidence, _ = collect(controller, [])
+        self.assertFalse(evidence.proxy_ok)
+
     def test_halt_exits_without_probe(self):
         with patch('tools.tun_watchdog_runner.is_halted', return_value=True), \
              patch('tools.tun_watchdog_runner.TunController') as controller:
