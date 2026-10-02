@@ -49,7 +49,7 @@ def read_driver_cards():
     for item in bindings.get('antigravity_account_stickiness', []):
         email = item.get('account')
         models = (quota.get(email) or {}).get('models') or []
-        cards.append({'account': email, 'port': item.get('port'), 'node_name': item.get('node_name'), 'proxy_id': item.get('proxy_id'), 'models': models, 'mapping_source': 'antigravity_account_stickiness + local quota'})
+        cards.append({'account': email, 'port': item.get('port'), 'node_name': item.get('node_name'), 'proxy_id': item.get('proxy_id'), 'models': models, 'quota_groups': (quota.get(email) or {}).get('quota_groups', (quota.get(email) or {}).get('_quota_groups', [])), 'mapping_source': 'antigravity_account_stickiness + local quota'})
     return {'ok': True, 'cards': cards, 'count': len(cards), 'secrets_excluded': True}
 
 def read_antigravity_quota():
@@ -60,7 +60,7 @@ def read_antigravity_quota():
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
             models = data.get('quota', {}).get('models', [])
-            rows.append({'id': data.get('id'), 'email': data.get('email'), 'quota_groups': data.get('quota', {}).get('quota_groups', []), 'models': [
+            rows.append({'id': data.get('id'), 'email': data.get('email'), 'quota_groups': data.get('quota', {}).get('quota_groups', []), 'mapping_groups': data.get('quota', {}).get('quota_groups', []), 'models': [
                 {'name': m.get('name'), 'display_name': m.get('display_name'), 'percentage': m.get('percentage'), 'reset_time': m.get('reset_time')}
                 for m in models if isinstance(m, dict)
             ]})
