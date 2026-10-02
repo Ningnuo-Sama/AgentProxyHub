@@ -55,6 +55,13 @@
 - 新代码回退标签 `pre-personal-tun-20261002`；运行配置、外置EVA页面、路由/DNS/系统代理快照位于 `D:\ProgramData\AgentProxyHub\backups\pre-personal-tun-20261002`。候选配置只存ProgramData，不进Git。
 - 修正适配层曾硬编码控制密钥：现从运行YAML读取。历史Git已有该密钥，需后续协调轮换，不能声称历史凭据已清除。
 
+## 2026-10-02 管理员续接实测
+
+- 当前宿主High权限，但旧mihomo对TUN PATCH实际报 `configure tun interface: Access is denied`，不以宿主权限当作旧内核权限证据；TUN未上线。
+- 尝试候选启动时PowerShell Start-Process数组参数中的空格未保留引号，导致内核未监听。已停止错误启动实例，用完整引号参数恢复正式配置。
+- 恢复后PID26700，21909监听正常；125固定SOCKS端口逐一TCP连接全部成功，真实控制器读回TUN关闭。期间业务连接会中断，不声称无影响。
+- 尚未验证Google/百度实际分流、UDP、看门狗断网闭环和按钮运行部署；后续不得重复无效启用操作，需要先核对新内核权限和守护部署。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
