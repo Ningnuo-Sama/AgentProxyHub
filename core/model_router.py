@@ -24,10 +24,11 @@ def _policy() -> dict[str, Any]:
         return json.load(handle)
 
 
-def _secret_by_name(fragment: str) -> bytes:
+def _secret_by_name(fragment: str, *, preferred_name: str | None = None) -> bytes:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     fragment = fragment.lower()
-    entry = next((e for e in manifest.get("entries", []) if fragment in str(e.get("source_name", "")).lower()), None)
+    entries = [e for e in manifest.get("entries", []) if fragment in str(e.get("source_name", "")).lower()]
+    entry = next((e for e in entries if preferred_name and str(e.get("source_name", "")) == preferred_name), None) or (entries[0] if entries else None)
     if not entry:
         raise KeyError(f"credential_not_found:{fragment}")
     return read_secret(entry["id"])
@@ -43,7 +44,7 @@ def _credential(kind: str) -> tuple[str, str]:
             return base, key
         return base + "/v1", key
     if kind == "glm":
-        raw = _secret_by_name("zhipu.txt").decode("utf-8", "replace").strip().splitlines()
+        raw = _secret_by_name(".txt", preferred_name="智谱决策专用.txt").decode("utf-8", "replace").strip().splitlines()
         return "https://open.bigmodel.cn/api/paas/v4", raw[-1].strip()
     if kind == "gpt":
         raw = _secret_by_name("aicost GPT6.1sol").decode("utf-8", "replace").strip()

@@ -993,16 +993,11 @@ def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
                 result[name] = {"status": "ok", "http_status": response.status, "url": url}
         except Exception as exc:
             result[name] = {"status": "unavailable", "url": url, "error": type(exc).__name__}
-    glm_env = r"D:\GitHub\GLM-4flash\config\.env"
     glm_key = ""
     glm_base = "https://open.bigmodel.cn/api/paas/v4"
     try:
-        with open(glm_env, "r", encoding="utf-8-sig") as handle:
-            for line in handle:
-                if line.startswith("ZHIPUAI_API_KEY="):
-                    glm_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                elif line.startswith("ZHIPUAI_BASE_URL="):
-                    glm_base = line.split("=", 1)[1].strip().rstrip("/")
+        from core.model_router import _credential
+        glm_base, glm_key = _credential("glm")
         if glm_key:
             request = urllib.request.Request(glm_base + "/models", headers={"Authorization": f"Bearer {glm_key}"})
             with urllib.request.urlopen(request, timeout=5) as response:
