@@ -161,6 +161,8 @@
 
 - 生产看门狗自然失联演练：个人TUN曾真实启动（PID21704、desired_on=true），随后仅强制终止个人可执行文件；20秒后业务PID/控制器仍正常、业务TUN=false，但发现旧逻辑不会把desired_on固化为false。已修复PersonalControllerGuard三次失联调用close_personal（先原子落盘off再个人停止），80测试通过；关闭意图已现场重置false，看门狗任务重启运行。该演练证明未复活个人且业务不受影响，也记录了修复前缺口；修复后尚未再做自然失联重复演练。
 
+- 修复后自然失联复测：启动个人TUN返回personal_started/tun=true，单独终止个人进程，等待20秒（≥3个5秒看门狗采样）后desired_on=false、个人进程/控制器不存在；看门狗任务仍Running；业务tun=false、125固定端口全通。80测试及diff通过。修复后自然失联链路已闭环，未复活个人或重启业务。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
