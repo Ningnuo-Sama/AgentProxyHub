@@ -155,6 +155,8 @@
 
 - 最终运行态收口：已启动已安装的AgentProxyHub-Personal-TUN-Watchdog登录任务；当前个人desired_on=false，任务仅执行个人21919关闭态监护，不启动个人TUN；业务控制器tun=false，125固定端口探活全通。任务状态现场为Running；EVA8767未保持常驻（避免重复实例），业务mihomo未执行重启。79测试通过。任务可用uninstall-personal-watchdog-task.ps1回退。
 
+- EVA最终单实例真实闭环：重启单实例包装器后，/api/route start仅在控制器21919回读tun_enabled=true后返回code=personal_started/出海展開中；随后stop返回ok、business_kernel_changed=false、出海介入。期间业务内核未重启，测试后个人desired_on=false、个人进程已停。此前旧适配层返回personal_start_submitted的竞态已修复；79测试通过。页面8768/适配层8767均可访问，但尚未做浏览器实际点击截图和Gemini/UDP全量业务验收。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

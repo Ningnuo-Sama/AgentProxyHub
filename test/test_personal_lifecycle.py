@@ -29,6 +29,7 @@ class PersonalLifecycleTests(unittest.TestCase):
         with patch.object(life, 'is_halted', return_value=False), \
              patch.object(life, '_running', return_value=True), \
              patch.object(Path, 'read_text', return_value='tun:\n  enable: true\n'), \
+             patch('core.tun_controller.TunController.status', return_value={'tun_enabled': True}), \
              patch.object(life, 'set_desired') as set_state:
             result = life.start()
         self.assertEqual('personal_already_running', result['code'])

@@ -1,5 +1,6 @@
 """个人出海生命周期；只操作独立内核，不触碰业务内核。"""
 import subprocess
+import time
 from pathlib import Path
 from .kernel_control import PERSONAL_EXE, control_lock, is_halted, stop_personal_kernel
 from .personal_route_state import set_desired
@@ -45,8 +46,12 @@ def start():
         if config.get('tun', {}).get('enable') is not True:
             return {'ok': False, 'code': 'personal_config_not_ready', 'verification': 'tun_disabled_candidate'}
         if _running():
-            set_desired(True)
-            return {'ok': True, 'code': 'personal_already_running', 'label': '出海展開中'}
+            from .tun_controller import TunController
+            state = TunController(PERSONAL_CONFIG).status()
+            if state.get('tun_enabled') is True:
+                set_desired(True)
+                return {'ok': True, 'code': 'personal_already_running', 'label': '出海展開中'}
+            return {'ok': False, 'code': 'personal_process_not_ready', 'verification': 'controller_tun_not_enabled'}
         set_desired(True)
         try:
             subprocess.Popen([PERSONAL_EXE, '-d', str(PERSONAL_DIR), '-f', str(PERSONAL_CONFIG)],
@@ -54,8 +59,20 @@ def start():
         except Exception as exc:
             set_desired(False)
             return {'ok': False, 'code': 'personal_start_failed', 'error': type(exc).__name__}
-    return {'ok': True, 'code': 'personal_start_submitted', 'label': '出海展開中',
-            'verification': 'controller_readback_required'}
+    from .tun_controller import TunController
+    controller = TunController(PERSONAL_CONFIG)
+    deadline = time.monotonic() + 8
+    state = controller.status()
+    while time.monotonic() < deadline and state.get('tun_enabled') is not True:
+        time.sleep(0.25)
+        state = controller.status()
+    if state.get('tun_enabled') is True:
+        return {'ok': True, 'code': 'personal_started', 'label': '出海展開中',
+                'verification': 'controller_tun_enabled'}
+    set_desired(False)
+    stop_personal_kernel()
+    return {'ok': False, 'code': 'personal_start_unverified',
+            'verification': 'controller_tun_not_enabled', 'controller': state}
 
 
 def stop():
