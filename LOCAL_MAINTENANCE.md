@@ -135,6 +135,8 @@
 
 - 个人controller-loss故障注入：演练运行个人TUN后，将测试监护客户端指向已bind但不listen的loopback端口，3次真实连接拒绝，第3次PersonalControllerGuard调用stop_personal成功；真实个人控制器随后不可达，网卡/路由0，业务PID不变，21012持续TLS退出后204，8账号出口开启期间204、绑定配置不变。演练exit0，随后增加故障注入验收判据仅py_compile+73回归，未重跑收紧版。不是生产控制器自然失联或常驻服务验收。
 
+- 个人关闭意图持久化：新增personal_route_state，缺失/损坏默认off，close_personal在共用锁内先原子落盘off再只停个人，失败返回不隐藏；个人runner在off时不计失联、不重启，若读到TUN仍开则仅停止个人。75测试通过，--personal --once现场输出personal_desired_off。未接通EVA/启动入口、未安装常驻任务；控制器未知且off时的残余进程清理仍需生命周期完善。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
