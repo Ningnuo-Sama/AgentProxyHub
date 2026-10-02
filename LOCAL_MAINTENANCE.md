@@ -149,6 +149,8 @@
 
 - 个人看门狗常驻入口：新增run-personal-watchdog.ps1/.bat及安装/卸载Scheduled Task脚本，任务名AgentProxyHub-Personal-TUN-Watchdog，AtLogOn、仅--personal --interval 5，不自动启动个人TUN。已实际Register并Start验证，任务启动个人runner且业务TUN=false；随后Stop任务，当前任务已安装但未运行（Ready）。runner直接受限测试超时是预期常驻行为，不是功能失败；卸载脚本可回退。79测试通过。
 
+- EVA源码API二次实测未完成：直接启动时发现已有多个eva_h5_adapter候选进程/8767竞争，POST请求出现连接意外关闭及stop返回500；随后清点未发现仍监听8767的EVA适配层，个人desired_on=false/进程不存在，业务状态未受影响。未继续强杀不明宿主进程，也未把失败误判为个人TUN故障。正式入口仍需单实例管理和端口归属后再验收。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
