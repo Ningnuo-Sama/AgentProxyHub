@@ -19,6 +19,7 @@ UPSTREAMS = {
     'pet': 'http://127.0.0.1:8766/health',
 }
 ALLOWED_TASKS = {'scan_orphans', 'audit_log', 'clean_all_safe_orphans'}
+ALLOWED_COMMANDS = {'health', 'recovery', 'autonomy', 'bindings', 'quota', 'models', 'usage'}
 LOG_SOURCES = {
     'mihomo': Path(r'D:\Program Files\AgentProxyHub\logs\bridge.log'),
     'hermes': Path(r'D:\Program Files (x86)\hermes\logs\gateway.log'),
@@ -123,6 +124,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, tool_autonomy_action({'action':'run_once', 'notify': bool(body.get('notify', True))}))
         if path == '/api/recovery':
             return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
+        if path == '/api/command':
+            command = str(body.get('command') or '').strip().lower()
+            if command not in ALLOWED_COMMANDS: return self.send_json(403, {'ok': False, 'code':'command_not_allowed', 'allowed': sorted(ALLOWED_COMMANDS)})
+            if command == 'health': return self.send_json(200, tool_channel_health({}))
+            if command == 'recovery': return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
+            if command == 'autonomy': return self.send_json(200, tool_autonomy_action({'action':'run_once', 'notify': True}))
+            if command == 'bindings': return self.send_json(200, {'ok': True, 'result': tool_get_profile_bindings({})})
+            if command == 'quota': return self.send_json(200, read_antigravity_quota())
+            if command == 'models': return self.send_json(200, model_status())
+            from core.model_usage import usage_summary
+            return self.send_json(200, usage_summary())
         if path == '/api/complete':
             prompt = str(body.get('prompt') or '')
             urgency = str(body.get('urgency') or 'daily')
