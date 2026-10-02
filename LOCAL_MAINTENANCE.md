@@ -105,6 +105,8 @@
 
 - 2026-10-03最终续轮：为隔离21012候选补齐`dns-hijack: [any:53]`、gvisor和198.18地址，修正fake-ip-filter为`+.cn`；启动后严格验收首次返回 `tun_verified`/exit 0（百度200、Google204、Meta Up、分流路由、125端口全通），系统Google DNS返回198.18.0.12。finally中热重载关闭快照成功，随后确认tun=false、Meta网卡/路由数量均0、125端口全通。预检PowerShell读取不存在halt文件出现非终止错误；已核实统一is_halted为false（缺失表示未急停），后续必须用统一门禁而非裸Get-Content。源码补齐DNS劫持及回归断言，未部署正式常驻配置，UDP/Steam/独立watchdog/跨进程急停及失联回滚仍待完成。
 
+- 2026-10-03业务无干扰隔离改造第一步：新增`core/personal_tun_isolation.py`，独立个人候选默认TUN关闭、控制器21919带随机鉴权、设备APH-Personal、198.19地址，仅经loopback固定SOCKS21012出海，不复制125业务listeners或节点凭据，拒绝业务TUN开启/无物理接口/端口冲突。56测试通过，实际mihomo -t通过。仅生成ProgramData关闭候选，未启动第二内核、未停止业务内核；进程级防回捕、独立目录/急停/watchdog和Gemini长连接无干扰仍未验证。此前恢复通知移动到底层仍无法覆盖任意PowerShell直接启动，不能把它描述为已消除所有漏报。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
