@@ -1044,6 +1044,38 @@ def tool_resident_engineer(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "code": "resident_engineer_failed", "error": str(exc)[:200], "recoverable": True}
 
 
+def tool_jingguanjia_orphan(args: Dict[str, Any]) -> Dict[str, Any]:
+    """通过本地鲸管家 Agent 任务接口扫描、清理并读取审计记录。"""
+    import urllib.request
+    action = str(args.get("action") or "scan")
+    allowed = {"scan_orphans", "clean_all_safe_orphans", "audit_log", "whitelist_add"}
+    if action not in allowed:
+        return {"ok": False, "code": "invalid_action", "allowed": sorted(allowed)}
+    payload: Dict[str, Any] = {"task_id": f"agentproxyhub-orphan-{int(time.time())}", "task": action}
+    if action == "audit_log":
+        payload["args"] = {"limit": max(1, min(int(args.get("limit", 100)), 500))}
+    elif action == "whitelist_add":
+        name = str(args.get("name") or "").strip()
+        if not name or len(name) > 120:
+            return {"ok": False, "code": "invalid_name"}
+        payload["args"] = {"name": name, "reason": str(args.get("reason") or "外部 Agent 反馈")[:300]}
+    try:
+        from core.jingguanjia_notify import _vault_token
+        token = _vault_token()
+        if not token:
+            return {"ok": False, "code": "token_unavailable", "recoverable": True}
+        request = urllib.request.Request(
+            "http://127.0.0.1:8766/task",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json", "Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(request, timeout=35) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        return {"ok": False, "code": "jingguanjia_task_failed", "error": type(exc).__name__, "recoverable": True}
+
+
 def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
     """通过已有本地适配器发送气泡；失败自报，不阻塞其它 MCP 工具。"""
     text = args.get("text")
@@ -1165,6 +1197,20 @@ TOOLS = [
             }
         },
         "handler": tool_autonomy_action
+    },
+    {
+        "name": "jingguanjia_orphan",
+        "description": "鲸管家孤儿进程 Agent/MCP：扫描、清理全部安全可杀孤儿、读取审计日志、提交错杀进程名到白名单；不碰系统/受保护服务/人工确认项",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["scan_orphans", "clean_all_safe_orphans", "audit_log", "whitelist_add"], "default": "scan_orphans"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                "name": {"type": "string", "maxLength": 120},
+                "reason": {"type": "string", "maxLength": 300}
+            }
+        },
+        "handler": tool_jingguanjia_orphan
     },
     {
         "name": "notify_jingguanjia",
