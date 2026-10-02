@@ -411,10 +411,10 @@ $script:HttpFormats = @('http://')
         <Grid.ColumnDefinitions><ColumnDefinition Width="1.35*"/><ColumnDefinition Width="0.85*"/></Grid.ColumnDefinitions>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <UniformGrid Grid.ColumnSpan="2" Columns="4" Margin="0,0,0,12">
-          <Border Background="#160F18" BorderBrush="#6B2730" BorderThickness="1" Padding="13" Margin="0,0,5,0"><StackPanel><TextBlock Text="01 / GOOGLE" Foreground="#FF6B35" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="GoogleState" Text="锚定状态未知" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock x:Name="GoogleDetail" Text="等待验证" Foreground="#B9AFCA" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#160F18" BorderBrush="#6B2730" BorderThickness="1" Padding="13" Margin="0,0,5,0"><StackPanel><TextBlock Text="01 / GOOGLE" Foreground="#FF6B35" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="GoogleState" Text="锚定状态未知" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock x:Name="GoogleDetail" Text="8045 / Flow 已登录 · 账号出口粘性保持" Foreground="#B9AFCA" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
           <Border Background="#120F18" BorderBrush="#52305E" BorderThickness="1" Padding="13" Margin="5,0,5,0"><StackPanel><TextBlock Text="02 / CLAUDE" Foreground="#CF78FF" FontFamily="Consolas" FontSize="12"/><TextBlock Text="使用出口未登记" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock x:Name="ClaudeDetail" Text="等待网关证据" Foreground="#B9AFCA" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
-          <Border Background="#10141A" BorderBrush="#235A67" BorderThickness="1" Padding="13" Margin="5,0,5,0"><StackPanel><TextBlock Text="03 / FLOW" Foreground="#6DDBFF" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="FlowState" Text="网关待命" FontSize="19" Foreground="#6DDBFF" Margin="0,9,0,3"/><TextBlock x:Name="FlowDetail" Text="实时消息未接入" Foreground="#A9C4CF" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
-          <Border Background="#18130E" BorderBrush="#80511E" BorderThickness="1" Padding="13" Margin="5,0,0,0"><StackPanel><TextBlock Text="04 / MOBILE" Foreground="#FFB347" FontFamily="Consolas" FontSize="12"/><TextBlock Text="告警未接入" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock Text="不伪造送达回执" Foreground="#C0B4A5" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#10141A" BorderBrush="#235A67" BorderThickness="1" Padding="13" Margin="5,0,5,0"><StackPanel><TextBlock Text="03 / FLOW" Foreground="#6DDBFF" FontFamily="Consolas" FontSize="12"/><TextBlock x:Name="FlowState" Text="网关待命" FontSize="19" Foreground="#6DDBFF" Margin="0,9,0,3"/><TextBlock x:Name="FlowDetail" Text="本地资料已登录 · 生图走 8001 · 付费生成最后确认" Foreground="#A9C4CF" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
+          <Border Background="#18130E" BorderBrush="#80511E" BorderThickness="1" Padding="13" Margin="5,0,0,0"><StackPanel><TextBlock Text="04 / MOBILE" Foreground="#FFB347" FontFamily="Consolas" FontSize="12"/><TextBlock Text="微信已接入" FontSize="19" Foreground="#FFB347" Margin="0,9,0,3"/><TextBlock Text="目标：一帆 · 发送后记录 ACK" Foreground="#C0B4A5" FontSize="11" TextWrapping="Wrap"/></StackPanel></Border>
         </UniformGrid>
         <Border Grid.Row="1" Grid.Column="0" Background="#0E1117" BorderBrush="#3C5366" BorderThickness="1" Padding="12" Margin="0,0,7,0">
           <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -432,7 +432,7 @@ $script:HttpFormats = @('http://')
         </Border>
       </Grid>
       <Border Grid.Row="2" Background="#18110E" BorderBrush="#80511E" BorderThickness="1" Padding="12" CornerRadius="2">
-        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="CockpitTicker" Text="SYSTEM // 正在等待网关事件" Foreground="#FFB347" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"/><TextBlock Text="F9 ENGINEER · CTRL+D DEBUG" Foreground="#8F7772" FontFamily="Consolas" FontSize="10" Grid.Column="1" VerticalAlignment="Center"/></Grid>
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="CockpitTicker" Text="SYSTEM // 已上线：Flow 已登录 · 自动换绑已授权 · 微信目标：一帆 · 付费生成最后确认" Foreground="#FFB347" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"/><TextBlock Text="F9 ENGINEER · CTRL+D DEBUG" Foreground="#8F7772" FontFamily="Consolas" FontSize="10" Grid.Column="1" VerticalAlignment="Center"/></Grid>
       </Border>
     </Grid>
     <Grid x:Name="DebugHost" Visibility="Collapsed">
@@ -1558,6 +1558,7 @@ $script:GuardBindKey   = -1
 $script:GuardFillPs    = $null
 $script:GuardFillAsync = $null
 $script:ActiveView     = 'Export'
+$script:LaunchPolicy   = [pscustomobject]@{ AutoRebind = $true; PaidGeneration = 'FINAL_CONFIRM'; WechatTarget = '一帆'; CliproxyApi = 'EXCLUDED' }
 
 function Set-GuardStatus([string]$msg) {
     $GuardStatusText.Text = $msg
