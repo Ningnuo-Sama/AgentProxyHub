@@ -169,6 +169,8 @@
 
 - EVA额度口径统一（不改UI结构）：以后端账号源quota_groups为唯一来源，新增/api/quota-summary并映射现有额度卡：Gemini/Claude均显示5H与weekly加权均值，生图显示gemini-3.1-flash-image账号模型均值；截图实测页面读取Gemini 55.1%（5H94.2%/7D55.1%）、Claude77.7%（5H100%/7D77.7%）、Gemini生图55.2%。原始账号字段仍可由/api/quota读取，未混用模型percentage冒充5H/周。80测试、py_compile和页面运行态验证通过。
 
+- 按用户确认清理Antigravity无真实账号绑定：先备份gui_config.json至C:\Users\1\.antigravity_tools\gui_config.json.bak-20261003-034831-before-remove-missing，再移除两条无账号映射（原代理ID对应21022/21012）；保留6条真实邮箱账号绑定。EVA适配层重启后/api/driver-cards与浏览器均实测6卡、6个真实邮箱，80测试通过。未删除账号文件或凭据，仅修改绑定账本。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
