@@ -76,6 +76,8 @@
 - 续轮9首次完成单实例候选切换实测：先确认旧实例退出，再以候选启动；Meta网卡出现，198.18.0.0/30及全局分流路由出现，live controller读回 `tun=true`。百度HTTP 200；Google HTTPS在8秒内握手超时，不能声称海外链路可用；125固定端口全通。
 - 随后使用运行目录 `rollback-disabled.yaml` PUT热重载，读回 `tun=false`；Meta网卡/路由消失，125固定端口全通，21909继续监听。再加载正式 `config.yaml` 复核关闭状态仍为false。完成一次可逆的TUN开→关演练，但Google代理、UDP/Steam、DNS劫持和常驻看门狗仍未验收。
 
+- 续轮10看门狗runner新增启动前manual-halt短路：人工急停时直接输出respect_manual_halt并退出，不探测、不调用撤销、不复活内核；新增测试后全套52项通过。正式状态仍TUN关闭。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

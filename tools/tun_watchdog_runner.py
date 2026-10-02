@@ -11,6 +11,8 @@ from core.kernel_control import is_halted
 from core.tun_controller import TunController
 from core.tun_watchdog import Evidence, TunWatchdog
 
+RUNTIME_HALT = Path(r'D:\ProgramData\AgentProxyHub\control\manual-halt.json')
+
 
 def tcp_probe(host, port, timeout=2):
     try:
@@ -54,6 +56,10 @@ def main():
     baseline = [p for p in (8001, 8045, 8767) if tcp_probe('127.0.0.1', p)]
     dog = TunWatchdog(controller.disable_tun)
     stop = threading.Event()
+    # 退出看门狗前不主动复活内核；人工闩锁由共享文件持续生效。
+    if is_halted():
+        print(json.dumps({'ok': True, 'code': 'manual_halt', 'decision': {'action': 'respect_manual_halt'}}, ensure_ascii=False), flush=True)
+        return 0
     try:
         while True:
             try:
