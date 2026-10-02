@@ -179,6 +179,8 @@
 
 - 日志拓扑盘点与补接：原统一接口只有mihomo bridge、Hermes、Hermes watchdog、AgentProxyHub usage/autonomy五类文本源；发现未接入的Antigravity请求数据库C:\Users\1\.antigravity_tools\proxy_logs.db（request_logs表，约2GB）。新增只读antigravity_requests源，输出时间/方法/模型/HTTP状态/耗时/URL/错误，不读取request_body、token或响应正文；EVA自动日志现在实测包含该源，约510行合并展示。Flow-Tools源码未发现独立正式日志文件，Hermes缓存/数据库未纳入，避免把临时缓存当项目业务日志。
 
+- 日志刷屏优化：截图中的“已接入日志源 7/7 … 100条”是每10秒定时读取后重复写入LIVE流，并非新业务事件。现按统计摘要去重：统计未变化时不再追加一行；日志内容仍在维护区真实刷新，首次/来源变化才写入滚屏。浏览器实测2行日志，仅保留一次7/7摘要与真实请求日志，未改UI布局。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
