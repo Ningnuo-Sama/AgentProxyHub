@@ -26,6 +26,9 @@
 - Gemini 故障模拟：确实进入 GLM 兜底分支。
 - GLM 重新核验：发现两条 DPAPI 金库条目（`zhipu.txt`、`智谱决策专用.txt`）；此前两条旧凭据的 `glm-5.3-flash` 推理均返回 HTTP 429/1113。用户随后提供新凭据，已只更新 `智谱决策专用.txt` 的 DPAPI 密文；使用新凭据对 `glm-5.3-flash` 做一次最小真实调用，返回 `OK`，HTTP 成功。路由已固定优先使用该专用条目。
 - Flow-Tools 健康检查：HTTP 200；尚未提交媒体生成任务。
+- Gemini 故障模拟闭环：Gemini → GLM 成功，`fallback_used=true`，未触发 GPT。
+- 驻场工程师：`model_status`、`model_complete` 成功；H5 `/api/models`、`/api/complete` 均 HTTP 200。
+- 脱敏 usage 汇总：20 条记录，未记录密钥或 Prompt。
 - Python 编译：通过。
 - 全部现有 unittest：27/27 通过。
 
