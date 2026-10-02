@@ -157,6 +157,8 @@
 
 - EVA最终单实例真实闭环：重启单实例包装器后，/api/route start仅在控制器21919回读tun_enabled=true后返回code=personal_started/出海展開中；随后stop返回ok、business_kernel_changed=false、出海介入。期间业务内核未重启，测试后个人desired_on=false、个人进程已停。此前旧适配层返回personal_start_submitted的竞态已修复；79测试通过。页面8768/适配层8767均可访问，但尚未做浏览器实际点击截图和Gemini/UDP全量业务验收。
 
+- 浏览器真实验收完成：访问8768 EVA页面，按钮初始显示“出海介入”；真实点击后页面显示“出海展開中”，后端start返回personal_started且controller tun=true；再次点击后页面恢复“出海介入 / LINE: OFF”，stop成功。业务控制器始终tun=false，个人desired_on=false，79测试通过。未调用生成/付费接口。该闭环覆盖按钮及生命周期，但仍不覆盖Gemini真实SSE、UDP/QUIC和自然失联。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
