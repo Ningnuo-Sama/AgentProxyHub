@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentProxyHub 全网互联拓扑与全量接口流动视觉大屏 (Tactical Ecosystem Flow Radar)</title>
+  <style>
+    /* ==========================================================
+       EVA 赛博战术暗黑美学 / 深度纯黑与高饱和霓虹配色
+       ========================================================== */
+    :root {
+      --bg-dark: #04060c;
+      --panel-bg: rgba(13, 19, 34, 0.92);
+      --card-bg: rgba(16, 24, 44, 0.95);
+      --card-border: rgba(45, 62, 99, 0.7);
+
+      --neon-cyan: #00f0ff;
+      --neon-green: #00ff9d;
+      --neon-amber: #ffb700;
+      --neon-red: #ff2a5f;
+      --neon-purple: #b026ff;
+
+      --status-done: #00ff9d;
+      --status-todo: #ffb700;
+      --status-unrealized: #ff2a5f;
+      --status-future: #b026ff;
+
+      --text-bright: #ffffff;
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+
+      --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+      --font-ui: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-ui);
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 顶部黄黑动态警戒条 */
+    .eva-warning-stripe {
+      height: 5px;
+      width: 100%;
+      background: repeating-linear-gradient(
+        -45deg,
+        #000 0px,
+        #000 12px,
+        var(--neon-amber) 12px,
+        var(--neon-amber) 24px
+      );
+      background-size: 200% 100%;
+      animation: stripeFlow 15s linear infinite;
+      z-index: 1000;
+      flex-shrink: 0;
+    }
+
+    @keyframes stripeFlow {
+      0% { background-position: 0% 0; }
+      100% { background-position: 100% 0; }
+    }
+
+    /* 战术控制顶栏 */
+    header.hud-header {
+      background: linear-gradient(180deg, rgba(13, 19, 34, 0.98) 0%, rgba(6, 9, 17, 0.96) 100%);
+      border-bottom: 1px solid rgba(0, 240, 255, 0.3);
+      padding: 8px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 900;
+      flex-shrink: 0;
+      backdrop-filter: blur(12px);
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border: 2px solid var(--neon-red);
+      background: rgba(255, 42, 95, 0.15);
+      color: var(--neon-red);
+      font-family: var(--font-mono);
+      font-weight: 900;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px rgba(255, 42, 95, 0.45);
+      clip-path: polygon(0 0, 100% 0, 100% 70%, 70% 100%, 0 100%);
+    }
+
+    .brand-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand-title {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-ver {
+      font-size: 10px;
+      padding: 1px 6px;
+      background: rgba(0, 240, 255, 0.15);
+      border: 1px solid var(--neon-cyan);
+      color: var(--neon-cyan);
+      border-radius: 2px;
+    }
+
+    .brand-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* 顶栏操作区 */
+    .hud-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(18, 26, 47, 0.8);
+      border: 1px solid var(--card-border);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .speed-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 2px;
+      font-size: 11px;
+    }
+    .speed-btn:hover { color: #fff; }
+    .speed-btn.active { background: var(--neon-cyan); color: #000; font-weight: 700; }
+
+    .status-filter-pills {
+      display: flex;
+      gap: 5px;
+    }
+
+    .pill-btn {
+      background: rgba(18, 26, 47, 0.7);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.2s ease;
+    }
+
+    .pill-btn:hover { border-color: var(--neon-cyan); color: #fff; }
+    .pill-btn.active[data-filter="all"] { border-color: #fff; color: #fff; background: rgba(255, 255, 255, 0.12); }
+    .pill-btn.active[data-filter="done"] { border-color: var(--status-done); color: var(--status-done); background: rgba(0, 255, 157, 0.18); }
+    .pill-btn.active[data-filter="todo"] { border-color: var(--status-todo); color: var(--status-todo); background: rgba(255, 183, 0, 0.18); }
+    .pill-btn.active[data-filter="unrealized"] { border-color: var(--status-unrealized); color: var(--status-unrealized); background: rgba(255, 42, 95, 0.18); }
+    .pill-btn.active[data-filter="future"] { border-color: var(--status-future); color: var(--status-future); background: rgba(176, 38, 255, 0.18); }
+
+    .btn-reset-view {
+      background: rgba(0, 240, 255, 0.12);
+      border: 1px solid var(--neon-cyan);
+      color: var(--neon-cyan);
+      padding: 4px 12px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.2s;
+    }
+    .btn-reset-view:hover { background: var(--neon-cyan); color: #000; box-shadow: 0 0 10px var(--neon-cyan); }
+
+    /* 主可视化视口 */
+    .viewport {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 50%, #060a14 0%, #010204 100%);
+    }
+
+    .viewport:active { cursor: grabbing; }
+
+    /* 背景网格微光 */
+    .grid-bg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 32px 32px;
+      pointer-events: none;
+    }
+
+    /* 拓扑世界坐标容器 (超大画布以容纳完整生态) */
+    #worldContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4400px;
+      height: 2400px;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    /* SVG 连线层 */
+    #svgConnections {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Canvas 动态流动粒子层 */
+    #canvasFlow {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 15;
+    }
+
+    /* 节点 HTML 容器 */
+    #nodesContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    /* 区域背景框 (Boundaries) */
+    .zone-box {
+      position: absolute;
+      border: 1px dashed rgba(45, 62, 99, 0.65);
+      border-radius: 8px;
+      background: rgba(13, 19, 34, 0.45);
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .zone-title {
+      position: absolute;
+      top: -12px;
+      left: 16px;
+      background: #080d1a;
+      padding: 2px 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      border: 1px solid var(--card-border);
+      border-radius: 3px;
+      color: var(--neon-cyan);
+    }
+
+    /* 拓扑节点样式 */
+    .flow-node {
+      position: absolute;
+      pointer-events: auto;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+      transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s, opacity 0.25s;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .flow-node:hover {
+      border-color: var(--neon-cyan);
+      box-shadow: 0 0 22px rgba(0, 240, 255, 0.45);
+      transform: translateY(-2px);
+      z-index: 50 !important;
+    }
+
+    .flow-node.active-focus {
+      border-color: #fff !important;
+      box-shadow: 0 0 30px rgba(255, 255, 255, 0.8) !important;
+    }
+
+    .flow-node.dimmed {
+      opacity: 0.14;
+      filter: grayscale(85%);
+      pointer-events: none;
+    }
+
+    .flow-node::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 4px;
+      height: 100%;
+      border-radius: 6px 0 0 6px;
+    }
+
+    .flow-node[data-status="done"]::before { background: var(--status-done); box-shadow: 0 0 8px var(--status-done); }
+    .flow-node[data-status="todo"]::before { background: var(--status-todo); box-shadow: 0 0 8px var(--status-todo); }
+    .flow-node[data-status="unrealized"]::before { background: var(--status-unrealized); box-shadow: 0 0 8px var(--status-unrealized); }
+    .flow-node[data-status="future"]::before { background: var(--status-future); box-shadow: 0 0 8px var(--status-future); }
+
+    .node-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .node-category {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .node-status-tag {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 2px;
+      white-space: nowrap;
+    }
+
+    .node-status-tag.done { color: var(--status-done); background: rgba(0, 255, 157, 0.12); border: 1px solid var(--status-done); }
+    .node-status-tag.todo { color: var(--status-todo); background: rgba(255, 183, 0, 0.12); border: 1px solid var(--status-todo); }
+    .node-status-tag.unrealized { color: var(--status-unrealized); background: rgba(255, 42, 95, 0.12); border: 1px solid var(--status-unrealized); }
+    .node-status-tag.future { color: var(--status-future); background: rgba(176, 38, 255, 0.12); border: 1px solid var(--status-future); }
+
+    .node-title-text {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .node-subtext {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.35;
+    }
+
+    .node-badge-row {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-top: 2px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--neon-cyan);
+    }
+
+    /* SVG 连线样式 */
+    .conn-path {
+      fill: none;
+      stroke-width: 2px;
+      stroke-linecap: round;
+      transition: stroke-width 0.2s, opacity 0.2s;
+    }
+
+    .conn-path.dimmed {
+      opacity: 0.10;
+    }
+
+    .conn-path.highlighted {
+      stroke-width: 4px !important;
+      filter: drop-shadow(0 0 8px currentColor);
+    }
+
+    /* 连线文字标签 */
+    .edge-label-bg {
+      fill: #050812;
+      stroke: var(--card-border);
+      stroke-width: 1px;
+      rx: 3px;
+    }
+
+    .edge-label-text {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      fill: var(--text-muted);
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+
+    /* 全息侧边抽屉 */
+    aside.tactical-drawer {
+      position: fixed;
+      top: 0;
+      right: -550px;
+      width: 530px;
+      height: 100vh;
+      background: rgba(10, 15, 28, 0.98);
+      border-left: 2px solid var(--neon-cyan);
+      box-shadow: -10px 0 50px rgba(0, 0, 0, 0.95);
+      z-index: 2000;
+      backdrop-filter: blur(20px);
+      transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+
+    aside.tactical-drawer.open { right: 0; }
+
+    .drawer-top {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(16, 24, 44, 0.88);
+    }
+
+    .drawer-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .btn-close {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-close:hover { border-color: var(--neon-red); color: var(--neon-red); }
+
+    .drawer-content {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .info-card {
+      background: rgba(16, 24, 44, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .info-code {
+      background: #04060b;
+      border: 1px solid rgba(45, 62, 99, 0.4);
+      padding: 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #e2e8f0;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      overflow-x: auto;
+    }
+
+    /* 底部状态条 */
+    footer.hud-footer {
+      background: rgba(8, 12, 22, 0.96);
+      border-top: 1px solid rgba(45, 62, 99, 0.45);
+      padding: 8px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      z-index: 900;
+      flex-shrink: 0;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .dot-lead {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 顶部黄黑动态警戒条 -->
+  <div class="eva-warning-stripe"></div>
+
+  <!-- 战术 HUD 顶栏 -->
+  <header class="hud-header">
+    <div class="brand-group">
+      <div class="brand-mark">AP</div>
+      <div class="brand-info">
+        <div class="brand-title">
+          AGENTPROXYHUB // FULL ECOSYSTEM FLOW RADAR
+          <span class="brand-ver">v1.2.0-OMNI</span>
+        </div>
+        <div class="brand-desc">全网互联拓扑 · Visual Pro(8320)防污染直连 · Flow-Tools(8001)号池 · 无限画布(3000) · 手机真机UID隔离 · 鲸管家 · Hermes</div>
+      </div>
+    </div>
+
+    <div class="hud-actions">
+      <!-- 流速控制 -->
+      <div class="speed-control">
+        <span>FLOW SPEED:</span>
+        <button class="speed-btn" data-speed="0">PAUSE</button>
+        <button class="speed-btn" data-speed="0.5">0.5X</button>
+        <button class="speed-btn active" data-speed="1">1.0X</button>
+        <button class="speed-btn" data-speed="2">2.0X</button>
+      </div>
+
+      <!-- 实施状态过滤药丸 -->
+      <div class="status-filter-pills">
+        <button class="pill-btn active" data-filter="all">全部</button>
+        <button class="pill-btn" data-filter="done">【已实现】</button>
+        <button class="pill-btn" data-filter="todo">【待开发】</button>
+        <button class="pill-btn" data-filter="unrealized">【未实现】</button>
+        <button class="pill-btn" data-filter="future">【展望中】</button>
+      </div>
+
+      <!-- 重置视角 -->
+      <button class="btn-reset-view" id="btnResetView">🎯 居中复位</button>
+    </div>
+  </header>
+
+  <!-- 可视化视口 -->
+  <div class="viewport" id="viewport">
+    <div class="grid-bg"></div>
+
+    <div id="worldContainer">
+      <!-- 区域边界 -->
+      <div id="zonesContainer"></div>
+
+      <!-- 拓扑连线 (SVG) -->
+      <svg id="svgConnections"></svg>
+
+      <!-- 动态流动光斑 (Canvas) -->
+      <canvas id="canvasFlow"></canvas>
+
+      <!-- 节点层 -->
+      <div id="nodesContainer"></div>
+    </div>
+  </div>
+
+  <!-- 侧边全息抽屉 -->
+  <aside class="tactical-drawer" id="tacticalDrawer">
+    <div class="drawer-top">
+      <div class="drawer-title" id="drawerTitle">模块全息图谱</div>
+      <button class="btn-close" id="btnCloseDrawer">✕</button>
+    </div>
+    <div class="drawer-content" id="drawerContent">
+      <!-- 动态填充 -->
+    </div>
+  </aside>
+
+  <!-- 底部战术状态栏 -->
+  <footer class="hud-footer">
+    <div class="legend-row">
+      <span style="color: var(--text-muted);">流动管道流向图例:</span>
+      <div class="legend-item"><span class="dot-lead" style="background: var(--neon-cyan);"></span> 代理与网络流量流</div>
+      <div class="legend-item"><span class="dot-lead" style="background: var(--neon-green);"></span> 巡检与置信度审计流</div>
+      <div class="legend-item"><span class="dot-lead" style="background: var(--neon-amber);"></span> MCP 协议与 Agent 调度流</div>
+      <div class="legend-item"><span class="dot-lead" style="background: var(--neon-red);"></span> 熔断自愈与向主人摇人告警流</div>
+      <div class="legend-item"><span class="dot-lead" style="background: var(--neon-purple);"></span> DPAPI 硬件密钥与凭据沙盒流</div>
+    </div>
+    <div>
+      <span>操作指南: [鼠标拖拽] 平移 | [滚轮] 缩放 | [单击任意节点] 穿透高亮全网互联上下游</span>
+    </div>
+  </footer>
+
+  <!-- ==========================================================
+       完整拓扑数据源与流动渲染引擎 (八大战区全息布局)
+       ========================================================== -->
+  <script>
+    const GRAPH_DATA = {
+      zones: [
+        { id: "zone_upstream", label: "ZONE 1: 上游订阅与凭据投喂金库", x: 40, y: 60, w: 460, h: 960 },
+        { id: "zone_core", label: "ZONE 2: 端口池内核与双看门狗自愈 (125 出口)", x: 550, y: 60, w: 460, h: 960 },
+        { id: "zone_probe", label: "ZONE 3: 探测矩阵与时序置信度引擎", x: 1060, y: 60, w: 460, h: 960 },
+        { id: "zone_mcp", label: "ZONE 4: MCP 26 大工具服务矩阵 (mcp/server.py)", x: 1570, y: 60, w: 560, h: 1100 },
+        { id: "zone_gateways", label: "ZONE 5: 模型与媒体反代网关层 (Visual Pro / Flow-Tools / Antigravity)", x: 2180, y: 60, w: 600, h: 1100 },
+        { id: "zone_canvas", label: "ZONE 6: 用户应用与创作消费层 (Daedalus Canvas 3000 / CloakMulti 7800)", x: 2830, y: 60, w: 560, h: 1100 },
+        { id: "zone_phone", label: "ZONE 7: 手机分身真机硬件隔离与微信创作闭环", x: 3440, y: 60, w: 580, h: 1100 },
+        { id: "zone_guardian", label: "ZONE 8: 桌面管家与终极向主人摇人闭环 (鲸管家:8766 / Hermes 微信直推)", x: 550, y: 1220, w: 3470, h: 480 }
+      ],
+      nodes: [
+        // ================= ZONE 1: 上游订阅与凭据金库 =================
+        {
+          id: "credential_intake",
+          title: "凭据无感投喂与分类引擎 【已实现】",
+          status: "done",
+          zone: "zone_upstream",
+          x: 70, y: 110, w: 400,
+          category: "Credential Intake",
+          subtext: "用户随手粘贴 Token/恢复码/AKSK ➔ 驻场工程师正则自动分类为 8 大类 ➔ 自动入库。",
+          tags: ["自动识别8大分类", "零手动维护"],
+          code: "core/resident_engineer.py & core/credential_vault.py",
+          desc: "自动识别机场订阅、Kie、TTAPI、火山TOS、Google账号等凭据，彻底杜绝明文散落。"
+        },
+        {
+          id: "dpapi_vault",
+          title: "DPAPI 硬件级加密凭据金库 【已实现】",
+          status: "done",
+          zone: "zone_upstream",
+          x: 70, y: 260, w: 400,
+          category: "Security Vault",
+          subtext: "基于 Windows CryptProtectData 本地用户上下文加密，无第三方依赖，落盘于 ProgramData。",
+          tags: ["DPAPI 加密", "manifest.json 零明文"],
+          code: "core/credential_vault.py",
+          desc: "双轨物理隔离：轨 A（模型Key，允许反代分发）与 轨 B（云存储AK/SK，沙盒锁死严禁作为 HTTP Header 外发）。"
+        },
+        {
+          id: "src_airports",
+          title: "上游机场订阅拉取引擎 【已实现】",
+          status: "done",
+          zone: "zone_upstream",
+          x: 70, y: 440, w: 400,
+          category: "Upstream Ingestion",
+          subtext: "定时或手动拉取蜂窝(FengWo)与星辰(XingChen)订阅，trojan/vless/ss 解析。",
+          tags: ["data/upstreams.json", "last-known-good 快照"],
+          code: "core/upstream_fetcher.py",
+          desc: "采用原子双写锁保护，失败保留上一份快照，绝不破坏现有账号端口绑定。"
+        },
+        {
+          id: "token_recon",
+          title: "订阅流量与重置倒计时侦测 【已实现】",
+          status: "done",
+          zone: "zone_upstream",
+          x: 70, y: 620, w: 400,
+          category: "Quota Watchdog",
+          subtext: "实时侦测蜂窝与星辰剩余流量、重置天数，面板醒目提示。",
+          tags: ["Userinfo 头部解析", "重置倒计时"],
+          code: "core/upstream_fetcher.py",
+          desc: "实时掌握机场额度健康度，提前防范订阅断流风控。"
+        },
+        {
+          id: "tos_relay",
+          title: "火山引擎 TOS 垫图图床中继 【未实现】",
+          status: "unrealized",
+          zone: "zone_upstream",
+          x: 70, y: 780, w: 400,
+          category: "Cloud Media",
+          subtext: "为 Midjourney TTAPI 垫图与视频首尾帧提供本地 SigV4 预签名上传，换取 7 天公网直链。",
+          tags: ["TOS SDK", "预签名直链"],
+          code: "core/tos_relay.py (待建)",
+          desc: "针对 TTAPI 官方 /upload 报 404 的痛点，在本地将图片上云并生成安全带有效期的公网 URL。"
+        },
+
+        // ================= ZONE 2: 端口池内核与双看门狗 =================
+        {
+          id: "mihomo_core",
+          title: "Mihomo Go 原生高性能核心 【已实现】",
+          status: "done",
+          zone: "zone_core",
+          x: 580, y: 110, w: 400,
+          category: "Core Engine",
+          subtext: "运行进程 PID: 56072，监听 125 个独立出口，承载全系统代理流量路由与高并发连接。",
+          tags: ["Go Native", "PID: 56072", "125 Ports"],
+          code: "D:\\Program Files\\AgentProxyHub\\bin\\mihomo.exe",
+          desc: "专为多账号隔离定制，单核承载数十个指纹浏览器并发连接，零卡顿。"
+        },
+        {
+          id: "cert_watchdog",
+          title: "证书漂移看门狗 (cert-watchdog) 【已实现】",
+          status: "done",
+          zone: "zone_core",
+          x: 580, y: 260, w: 400,
+          category: "Resilience Watchdog",
+          subtext: "轮询探测 SOCKS 出口，遇 SNI 校验失败自动注入 skip-cert-verify 并热重载。",
+          tags: ["每小时轮询", "0秒闪断自愈", "Controller API"],
+          code: "scripts/cert-watchdog.ps1",
+          desc: "通过 PUT 127.0.0.1:9090/configs 热重载内核，彻底解决机场证书轮换导致的假死故障。"
+        },
+        {
+          id: "pool_guard",
+          title: "Google送中一票否决与号池守护 【已实现】",
+          status: "done",
+          zone: "zone_core",
+          x: 580, y: 440, w: 400,
+          category: "Anti-SentToChina Guard",
+          subtext: "实测 policies.google.com/terms，一旦被判送中立即同区最小漂移平滑换绑。",
+          tags: ["送中一票否决", "同区最小漂移", "保护7账号"],
+          code: "scripts/pool-guard.ps1",
+          desc: "保护 Antigravity 与 Flow-Tools 谷歌账号。严格遵守无 BOM、LF 铁律回写。"
+        },
+        {
+          id: "port_pool_dual",
+          title: "一节点一独立端口双轨池 【已实现】",
+          status: "done",
+          zone: "zone_core",
+          x: 580, y: 620, w: 400,
+          category: "Port Management",
+          subtext: "蜂窝出口 (21001-21080 / HTTP 31001-31080) + 星辰出口 (22001-22045)。",
+          tags: ["SOCKS5 21001+", "HTTP 31001+"],
+          code: "core/gen-config.ps1 & data/port_map.csv",
+          desc: "单订阅自动展开为连续端口池，每个账号分配专属独立端口，杜绝 IP 串联连坐。"
+        },
+        {
+          id: "lan_gateway",
+          title: "局域网免装 App 分流总线 (39999) 【已实现】",
+          status: "done",
+          zone: "zone_core",
+          x: 580, y: 780, w: 400,
+          category: "LAN Bus",
+          subtext: "内网智能网关 (192.168.0.107:39999)，手机分身与内网设备无需安装客户端，直连享分流。",
+          tags: ["192.168.0.107:39999", "手机免梯"],
+          code: "config/config.yaml",
+          desc: "服务于实体 Root 手机 51e0d4aa，避免手机后台频繁杀梯子进程导致通信中断。"
+        },
+
+        // ================= ZONE 3: 探测矩阵与置信度 =================
+        {
+          id: "scene_matrix",
+          title: "多场景规则靶场雷达 (Scene Matrix) 【已实现】",
+          status: "done",
+          zone: "zone_probe",
+          x: 1090, y: 110, w: 400,
+          category: "Scene Probe",
+          subtext: "外置 scenes.json 驱动：Antigravity(Gemini)、Claude专属、ChatGPT、Facebook、General。",
+          tags: ["scenes.json", "5大业务靶场"],
+          code: "config/scenes.json & core/probe_engine.py",
+          desc: "解耦式规则矩阵，针对 Claude 测 1020 盾、针对 Gemini 测送中、针对 FB 测住宅家宽。"
+        },
+        {
+          id: "google_verifier",
+          title: "Google 官方自判国家真机探针 【已实现】",
+          status: "done",
+          zone: "zone_probe",
+          x: 1090, y: 260, w: 400,
+          category: "Geo Intelligence",
+          subtext: "解析 Google 真实返回的 Country Version，识破伪装海外但被判为 China 的送中节点。",
+          tags: ["Google Country", "一票否决源"],
+          code: "core/probe_engine.py",
+          desc: "真机实测 125 端口，若判定为 China，直接触发一票否决，Antigravity 场景判 F 级。"
+        },
+        {
+          id: "confidence_engine",
+          title: "三维加权时序置信度引擎 【已实现】",
+          status: "done",
+          zone: "zone_probe",
+          x: 1090, y: 440, w: 400,
+          category: "Confidence Scoring",
+          subtext: "加权模型：物理稳定性 40% + 大区合规 30% + 协议健康 30%，保留 24 次延迟样本。",
+          tags: ["40%/30%/30%", "方差抖动计算"],
+          code: "core/confidence_engine.py",
+          desc: "产出 confidence_state.json 时序账本。只产出建议，绝不擅自换绑，保护老号粘性。"
+        },
+        {
+          id: "observation_clock",
+          title: "72h 分段观察钟与洲际漂移一票否决 【已实现】",
+          status: "done",
+          zone: "zone_probe",
+          x: 1090, y: 620, w: 400,
+          category: "Risk Control",
+          subtext: "24h 解锁备选(60分)、48h 候选优先(80分)、72h S级置信(100分)；跨洲漂移封禁 7 天。",
+          tags: ["72h 观察钟", "洲际漂移禁用7天"],
+          code: "core/confidence_engine.py",
+          desc: "同大区跨国扣 30 分重置 48h，同国换 IP 扣 10 分。严防 IP 漂移导致平台批量封号。"
+        },
+
+        // ================= ZONE 4: MCP 26 大工具服务矩阵 =================
+        {
+          id: "mcp_hub",
+          title: "MCP JSON-RPC 2.0 stdio 服务端 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 110, w: 500,
+          category: "Protocol Gateway",
+          subtext: "标准 MCP 宿主接入点 (Claude Desktop / Cursor / DSH)，暴露 26 个工具完整操作集。",
+          tags: ["stdio 协议", "跨进程文件锁"],
+          code: "mcp/server.py",
+          desc: "通过 msvcrt.locking 实现 bindings.json 与 upstreams.json 的跨进程并发安全写入。"
+        },
+        {
+          id: "mcp_sched_group",
+          title: "MCP: 节点智能调度与绑定类 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 240, w: 500,
+          category: "MCP Tools (6)",
+          subtext: "agent_recommend_proxy, list_matched_proxies, get_proxy_command, bind_profile_proxy, get_profile_bindings, auto_rebind_profile",
+          tags: ["推荐防换绑", "环境锁定", "只读解析"],
+          code: "mcp/server.py",
+          desc: "为指纹环境分配专属出口，解析 Antigravity 7 账号粘性，保障老号长期存活。"
+        },
+        {
+          id: "mcp_probe_group",
+          title: "MCP: 探针验证与置信度审计类 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 400, w: 500,
+          category: "MCP Tools (4)",
+          subtext: "google_verify_proxy, test_proxy_target, audit_confidence, list_scenes",
+          tags: ["真机自判", "现场探活", "三维审计"],
+          code: "mcp/server.py",
+          desc: "向 Agent 返回 Google 真实自判国与时序置信分，识破送中节点。"
+        },
+        {
+          id: "mcp_upstream_group",
+          title: "MCP: 上游机场生命周期管理类 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 560, w: 500,
+          category: "MCP Tools (3)",
+          subtext: "get_upstream_sources, set_upstream_credential, refresh_upstream_nodes",
+          tags: ["脱敏拉取", "原子更新", "凭据登记"],
+          code: "mcp/server.py",
+          desc: "支持 Agent 登记新机场凭据、拉取节点并原子刷新 nodes.json。"
+        },
+        {
+          id: "mcp_autonomy_group",
+          title: "MCP: 自治中枢与驻场运维类 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 720, w: 500,
+          category: "MCP Tools (5)",
+          subtext: "autonomy_status, autonomy_action, resident_engineer, kernel_recovery, jingguanjia_orphan",
+          tags: ["离线优先", "内核自愈", "孤儿查杀"],
+          code: "mcp/server.py",
+          desc: "提供开关管理、7天事件清理、内核平滑重启与驻场工程师诊断。"
+        },
+        {
+          id: "mcp_policy_group",
+          title: "MCP: 凭据安全、路由与记账类 【已实现】",
+          status: "done",
+          zone: "zone_mcp",
+          x: 1600, y: 880, w: 500,
+          category: "MCP Tools (6)",
+          subtext: "vault_status, proxy_network_route, pricing_quote, model_policy, usage_log, channel_health",
+          tags: ["DPAPI 状态", "防绕路分流", "脱敏记账"],
+          code: "mcp/server.py",
+          desc: "管理本地金库、给出 direct/proxy 路由建议并记账 Token 消耗。"
+        },
+
+        // ================= ZONE 5: 模型与媒体反代网关层 =================
+        {
+          id: "node_visual_pro",
+          title: "Ariadne Visual Pro 视觉中枢 (8320) 【已实现】",
+          status: "done",
+          zone: "zone_gateways",
+          x: 2210, y: 110, w: 540,
+          category: "Visual Gateway",
+          subtext: "服装提取、四视图、摆拍图、Midjourney管道。内置 ProxyHandler({}) 强行直连与阿里 DoH 穿透！",
+          tags: ["127.0.0.1:8320", "阿里 DoH 真实IP", "NO_PROXY 强直连"],
+          code: "D:\\GitHub\\ariadne\\tools\\ariadne-visual-pro\\src\\scene_service.py",
+          desc: "对 Kie/TTAPI 显式直连，绕过系统代理干扰；用 DoH 查真实 A 记录建 PinnedHTTPSConnection 避开 TUN fake-ip 198.18 污染。"
+        },
+        {
+          id: "node_flow_tools",
+          title: "Flow-Tools 7谷歌号池网关 (8001) 【已实现】",
+          status: "done",
+          zone: "zone_gateways",
+          x: 2210, y: 320, w: 540,
+          category: "Media Gateway",
+          subtext: "Rust 原生网关。7个 Google 账号池绑定蜂窝端口 (21013等)，DPAPI加密，Ariadne 协议欺骗外壳。",
+          tags: ["127.0.0.1:8001", "DPAPI 加密号池", "跨国漂移熔断"],
+          code: "D:\\GitHub\\Flow-Tools\\src-tauri\\src\\gateway.rs",
+          desc: "账号粘性绑定 socks5h://127.0.0.1:21013，固化盐湖城等固定出口；伪装 /v1beta/models/* 供画布免费调用 Imagen3/Veo。"
+        },
+        {
+          id: "node_antigravity",
+          title: "Antigravity Tools 模型反代网关 (8045) 【已实现】",
+          status: "done",
+          zone: "zone_gateways",
+          x: 2210, y: 530, w: 540,
+          category: "LLM Gateway",
+          subtext: "Gemini / Claude 多模型本地反代网关。7 个账号粘性锚定蜂窝 21001-21080 与星辰 22001+。",
+          tags: ["127.0.0.1:8045", "7个高价值账号", "全系统模型源"],
+          code: "C:\\Users\\1\\.antigravity_tools\\gui_config.json",
+          desc: "为 Visual Pro (/deep-optimize)、鲸管家 (8766)、Hermes 微信提供底层大模型算力，0ms 物理回环。"
+        },
+        {
+          id: "node_unified_gw",
+          title: "统一大模型 API 网关与盲中转 (32000) 【待开发】",
+          status: "todo",
+          zone: "zone_gateways",
+          x: 2210, y: 740, w: 540,
+          category: "Unified Gateway",
+          subtext: "监听本地 32000，虚拟 Token 代发与静默换线重试，终结多软件配置割裂与偷 Key 隐患。",
+          tags: ["方案 B 推荐", "虚拟 Token", "盲中转"],
+          code: "core/api_gateway.py (规划中)",
+          desc: "真实 Key 仅在本地内存组装，只建立纯盲代理隧道，外部节点无法窃听 Authorization 头。"
+        },
+
+        // ================= ZONE 6: 用户应用与创作消费层 =================
+        {
+          id: "node_canvas",
+          title: "Daedalus 无限画布主系统 (3000) 【已实现】",
+          status: "done",
+          zone: "zone_canvas",
+          x: 2860, y: 110, w: 500,
+          category: "Creative Canvas",
+          subtext: "前端 Vite 交互画布。集成 Visual Pro 摆拍节点与 Flow-Tools 免费出图节点，产物落盘 D:\\AI视频\\无限画布。",
+          tags: ["http://localhost:3000", "0成本出图", "落盘本地"],
+          code: "D:\\GitHub\\daedalus-canvas",
+          desc: "侧栏直连 8320 /settings 读写密钥；出图节点直连 8001 走欺骗网关，享 0 延迟、0 成本创作。"
+        },
+        {
+          id: "node_canvas_agent",
+          title: "Canvas Agent 外部编排桥 (17371) 【已实现】",
+          status: "done",
+          zone: "zone_canvas",
+          x: 2860, y: 320, w: 500,
+          category: "Canvas Agent Bridge",
+          subtext: "infinite-canvas MCP 服务端。接收 AI 智能体指令，在画布上自动创建节点、生成流程与连线。",
+          tags: ["127.0.0.1:17371", "MCP infinite-canvas"],
+          code: "D:\\GitHub\\daedalus-canvas\\canvas-agent",
+          desc: "使 Claude Code、DSH、Hermes 能够像操作白板一样自动生成短剧分镜与营销海报。"
+        },
+        {
+          id: "node_cloakmulti",
+          title: "CloakMulti 指纹浏览器控制台 (7800) 【已实现】",
+          status: "done",
+          zone: "zone_canvas",
+          x: 2860, y: 530, w: 500,
+          category: "Fingerprint Browser",
+          subtext: "多环境隔离浏览器。读 data/nodes.json 测绘，跨进程持锁共写 data/bindings.json 排他绑定出口。",
+          tags: ["127.0.0.1:7800", "bindings.lock 排他锁", "防串号封锁"],
+          code: "D:\\GitHub\\CloakMulti\\cloakmulti\\aphub.py",
+          desc: "使用 msvcrt.locking 与 AgentProxyHub 共写账本，独占绑定端口，保障 Twitter/FB 养号存活。"
+        },
+
+        // ================= ZONE 7: 手机分身真机硬件与创作闭环 =================
+        {
+          id: "phone_hardware",
+          title: "小米8 Root 真机与 UID 物理网络隔离 【已实现】",
+          status: "done",
+          zone: "zone_phone",
+          x: 3470, y: 110, w: 520,
+          category: "Mobile Hardware",
+          subtext: "实体机 (51e0d4aa，Root)。多用户分身 (User 0/11/12/13) 通过 iptables UID 分流至 21001/21003/21005/21008！",
+          tags: ["实体机 51e0d4aa", "iptables UID 分流", "多住宅IP隔离"],
+          code: "手机内核 iptables 规则 & Mihomo 客户端",
+          desc: "一部手机多矩阵号（小红书等），各号分流走不同真实住宅出口（香港数码通/台湾），实现物理级硬隔离。"
+        },
+        {
+          id: "phone_usb_tunnel",
+          title: "USB 硬件反向穿透总线 (adb reverse 48921) 【已实现】",
+          status: "done",
+          zone: "zone_phone",
+          x: 3470, y: 320, w: 520,
+          category: "Hardware Tunnel",
+          subtext: "守护进程维持 adb reverse tcp:48921，SmsForwarder 收到微信 <20ms 推入 PC SQLite 收件箱。",
+          tags: ["adb reverse 48921", "<20ms Webhook", "零公网暴露"],
+          code: "D:\\GitHub\\手机分身\\core\\notify_server.py",
+          desc: "物理 USB 反向穿透，彻底杜绝云端轮询和公网打洞安全隐患，延迟极低。"
+        },
+        {
+          id: "phone_wcdb_inbox",
+          title: "双轨数据保活 (WCDB 增量直读 + Scrcpy) 【已实现】",
+          status: "done",
+          zone: "zone_phone",
+          x: 3470, y: 530, w: 520,
+          category: "Data Engine",
+          subtext: "Root 权限直读 EnMicroMsg.db，破除微信通知折叠；Scrcpy 0.56ms 视频流按需唤醒屏幕。",
+          tags: ["直读 EnMicroMsg.db", "破解通知折叠", "Scrcpy 视频流"],
+          code: "D:\\GitHub\\手机分身\\tools\\wx_memory_reader.py",
+          desc: "彻底解决「[3条]微信消息」折叠漏判痛点，毫秒级还原真实微信会话。"
+        },
+        {
+          id: "phone_creation_bridge",
+          title: "微信聊天生图与原图回发 (CreationBridge) 【已实现】",
+          status: "done",
+          zone: "zone_phone",
+          x: 3470, y: 740, w: 520,
+          category: "Creation Bridge",
+          subtext: "微信发「/生图」➔ 询问横竖屏 ➔ 异步调用 8001/8320 出图 ➔ adb push 手机相册 ➔ 自动勾选原图回发！",
+          tags: ["微信端到端生图", "横竖屏确认", "原图无损回发"],
+          code: "D:\\GitHub\\手机分身\\core\\creation_bridge.py",
+          desc: "微信好友直接在聊天框点单出图，手机端仿生点击勾选原图回传，达成移动闭环。"
+        },
+
+        // ================= ZONE 8: 桌面管家与终极向主人摇人 =================
+        {
+          id: "jg_gateway",
+          title: "鲸管家 8766 通讯与双向运维网关 【已实现】",
+          status: "done",
+          zone: "zone_guardian",
+          x: 580, y: 1270, w: 500,
+          category: "Desktop Gateway",
+          subtext: "原生 node:http 监听 127.0.0.1:8766，POST /notify 气泡 (去重2048) 与 POST /task 双向运维 RPC。",
+          tags: ["127.0.0.1:8766", "DPAPI 自动鉴权", "双向系统运维"],
+          code: "D:\\GitHub\\鲸管家\\src\\features\\agent-notify\\server.ts",
+          desc: "启动时自动调用 resolve_notify_token.py 从金库解密 Token；提供 scan_orphans、whitelist_add 运维。"
+        },
+        {
+          id: "jg_pet_ui",
+          title: "Live2D 桌宠置顶穿透窗口与状态机 【已实现】",
+          status: "done",
+          zone: "zone_guardian",
+          x: 1110, y: 1270, w: 480,
+          category: "Live2D UI",
+          subtext: "screen-saver 置顶穿透，6 大表情帧 + 3 组动作 (squash/wiggle/hop)，自主闲时情绪算法。",
+          tags: ["鼠标穿透", "DPI锁死防放大", "深夜困倦/白天委屈"],
+          code: "D:\\GitHub\\鲸管家\\src\\features\\desktop-pet\\main.ts",
+          desc: "深夜 23点~7点自动切 sleepy，闲置超 30 分钟切 wronged。按 Enter 展开聊天，Esc 隐藏。"
+        },
+        {
+          id: "jg_orphan_guard",
+          title: "孤儿进程治理与系统防误杀白名单 【已实现】",
+          status: "done",
+          zone: "zone_guardian",
+          x: 1620, y: 1270, w: 520,
+          category: "Process Sanitation",
+          subtext: "遍历 Win32_Process 树，硬白名单保护 AgentProxyHub/Mihomo/Hermes/Flow，查杀僵尸进程。",
+          tags: ["PROTECTED_PATTERNS", "安全白名单", "audit.jsonl"],
+          code: "D:\\GitHub\\鲸管家\\src\\features\\orphan-cleaner\\core\\rules.ts",
+          desc: "查杀父控制台已退出的残留 vite/uvicorn，释放内存，并将清理详情落盘至 audit.jsonl。"
+        },
+        {
+          id: "node_hermes",
+          title: "Hermes Agent 微信 Bot 与自动化中枢 【已实现】",
+          status: "done",
+          zone: "zone_guardian",
+          x: 2170, y: 1270, w: 540,
+          category: "Hermes Bot",
+          subtext: "腾讯 iLink 微信官方通道 (NO_PROXY 直连)，模型走 8045，挂载 agentproxyhub MCP 具备代理感知能力。",
+          tags: ["iLink 微信长轮询", "NO_PROXY 保护", "MCP 代理感知"],
+          code: "D:\\Program Files (x86)\\hermes",
+          desc: "微信 Bot 个人代管中枢，免受系统代理断流影响，异常时负责向一帆微信发送报警推送。"
+        },
+        {
+          id: "phone_takeover_shake",
+          title: "终极安全熔断与向主人摇人闭环 (100%拦截) 【已实现】",
+          status: "done",
+          zone: "zone_guardian",
+          x: 2740, y: 1270, w: 580,
+          category: "Safety Kill Switch",
+          subtext: "涉及线下碰面/借钱资金 ➔ 100% 截断自动回复 ➔ 托盘标红 ➔ 鲸管家委屈冒泡 ➔ Hermes 微信直推一帆本人！",
+          tags: ["碰面/借款熔断", "桌宠委屈冒泡", "Hermes 直推一帆"],
+          code: "D:\\GitHub\\手机分身\\core\\alert_dispatch.py",
+          desc: "严禁擅自答应线下签约或资金往来，向主人摇人保证真人最终裁决权。"
+        }
+      ],
+      connections: [
+        // ZONE 1: 凭据流
+        { from: "credential_intake", to: "dpapi_vault", label: "CryptProtectData", type: "purple" },
+        { from: "dpapi_vault", to: "src_airports", label: "解密拉取上游", type: "purple" },
+        { from: "src_airports", to: "token_recon", label: "额度监控", type: "cyan" },
+        { from: "tos_relay", to: "dpapi_vault", label: "SigV4 预签名", type: "purple" },
+
+        // ZONE 2: 端口映射与看门狗
+        { from: "src_airports", to: "port_pool_dual", label: "生成 125 端口", type: "cyan" },
+        { from: "port_pool_dual", to: "mihomo_core", label: "接管监听", type: "cyan" },
+        { from: "cert_watchdog", to: "mihomo_core", label: "证书漂移热重载", type: "red" },
+        { from: "pool_guard", to: "port_pool_dual", label: "送中同区换绑", type: "red" },
+        { from: "mihomo_core", to: "lan_gateway", label: "绑定 39999 网关", type: "cyan" },
+
+        // ZONE 3: 探测与置信度
+        { from: "mihomo_core", to: "scene_matrix", label: "分流送检", type: "green" },
+        { from: "scene_matrix", to: "google_verifier", label: "真机自判", type: "green" },
+        { from: "google_verifier", to: "confidence_engine", label: "送中一票否决", type: "green" },
+        { from: "confidence_engine", to: "observation_clock", label: "72h 时序账本", type: "green" },
+
+        // ZONE 4: MCP 矩阵分发
+        { from: "mihomo_core", to: "mcp_hub", label: "提供端口池", type: "amber" },
+        { from: "confidence_engine", to: "mcp_hub", label: "提供置信度", type: "amber" },
+        { from: "mcp_hub", to: "mcp_sched_group", label: "调度工具集", type: "amber" },
+        { from: "mcp_hub", to: "mcp_probe_group", label: "探测工具集", type: "amber" },
+        { from: "mcp_hub", to: "mcp_upstream_group", label: "上游工具集", type: "amber" },
+        { from: "mcp_hub", to: "mcp_autonomy_group", label: "自治工具集", type: "amber" },
+        { from: "mcp_hub", to: "mcp_policy_group", label: "策略工具集", type: "amber" },
+
+        // ZONE 5: 模型与媒体反代网关层
+        { from: "port_pool_dual", to: "node_flow_tools", label: "socks5h 锁定 21013", type: "cyan" },
+        { from: "port_pool_dual", to: "node_antigravity", label: "粘性锁定 7 Google号", type: "cyan" },
+        { from: "dpapi_vault", to: "node_flow_tools", label: "DPAPI 解密账号池", type: "purple" },
+        { from: "node_antigravity", to: "node_visual_pro", label: "/deep-optimize 算力", type: "cyan" },
+        { from: "node_unified_gw", to: "node_antigravity", label: "0ms 盲中转", type: "cyan" },
+
+        // ZONE 6: 用户应用与创作消费层
+        { from: "node_visual_pro", to: "node_canvas", label: "8320 摆拍/场景接口", type: "cyan" },
+        { from: "node_flow_tools", to: "node_canvas", label: "欺骗路由免费出图", type: "cyan" },
+        { from: "node_canvas_agent", to: "node_canvas", label: "自动化编排画布", type: "amber" },
+        { from: "port_pool_dual", to: "node_cloakmulti", label: "独立端口隔离", type: "cyan" },
+        { from: "mcp_sched_group", to: "node_cloakmulti", label: "共写 bindings.json", type: "amber" },
+
+        // ZONE 7: 手机分身硬件与微信创作
+        { from: "port_pool_dual", to: "phone_hardware", label: "iptables UID 分流出口", type: "cyan" },
+        { from: "lan_gateway", to: "phone_hardware", label: "39999 免梯总线", type: "cyan" },
+        { from: "phone_hardware", to: "phone_usb_tunnel", label: "USB 反向穿透", type: "cyan" },
+        { from: "phone_usb_tunnel", to: "phone_wcdb_inbox", label: "消息毫秒级入库", type: "cyan" },
+        { from: "phone_wcdb_inbox", to: "phone_creation_bridge", label: "识别 /生图", type: "green" },
+        { from: "phone_creation_bridge", to: "node_flow_tools", label: "调 8001 免费生图", type: "cyan" },
+        { from: "phone_creation_bridge", to: "node_visual_pro", label: "调 8320 MJ 出图", type: "cyan" },
+        { from: "phone_creation_bridge", to: "phone_hardware", label: "adb push 原图回发", type: "amber" },
+
+        // ZONE 8: 桌面管家与向主人摇人终极闭环
+        { from: "dpapi_vault", to: "jg_gateway", label: "Token 自动解析", type: "purple" },
+        { from: "mcp_autonomy_group", to: "jg_gateway", label: "POST /notify 气泡", type: "amber" },
+        { from: "jg_gateway", to: "jg_pet_ui", label: "IPC 驱动动作表情", type: "cyan" },
+        { from: "jg_gateway", to: "jg_orphan_guard", label: "POST /task 查杀孤儿", type: "red" },
+        { from: "node_antigravity", to: "node_hermes", label: "供给 LLM 算力", type: "cyan" },
+        { from: "phone_wcdb_inbox", to: "phone_takeover_shake", label: "敏感词 100% 熔断", type: "red" },
+        { from: "phone_takeover_shake", to: "jg_gateway", label: "桌宠委屈冒泡", type: "red" },
+        { from: "phone_takeover_shake", to: "node_hermes", label: "iLink 直推一帆微信", type: "red" }
+      ]
+    };
+
+    // ==========================================================
+    // 渲染世界与平移缩放引擎
+    // ==========================================================
+    const viewport = document.getElementById("viewport");
+    const world = document.getElementById("worldContainer");
+    const svgConnections = document.getElementById("svgConnections");
+    const canvasFlow = document.getElementById("canvasFlow");
+    const ctx = canvasFlow.getContext("2d");
+
+    let transform = { x: 20, y: 15, scale: 0.52 };
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+    let flowSpeedMultiplier = 1.0;
+    let selectedNodeId = null;
+    let currentFilter = "all";
+
+    function updateTransform() {
+      world.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`;
+    }
+
+    function resetView() {
+      const vw = viewport.clientWidth;
+      const vh = viewport.clientHeight;
+      const targetScale = Math.min((vw - 60) / 4400, (vh - 60) / 1850, 0.65);
+      transform.scale = Math.max(targetScale, 0.38);
+      transform.x = Math.max((vw - 4400 * transform.scale) / 2, 15);
+      transform.y = 15;
+      updateTransform();
+    }
+
+    viewport.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".flow-node")) return;
+      isDragging = true;
+      dragStart = { x: e.clientX - transform.x, y: e.clientY - transform.y };
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging) return;
+      transform.x = e.clientX - dragStart.x;
+      transform.y = e.clientY - dragStart.y;
+      updateTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    viewport.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+      const newScale = Math.min(Math.max(transform.scale * zoomFactor, 0.22), 2.2);
+
+      const rect = viewport.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.scale);
+      transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
+      transform.scale = newScale;
+      updateTransform();
+    }, { passive: false });
+
+    // ==========================================================
+    // 渲染区域与节点
+    // ==========================================================
+    function renderZones() {
+      const container = document.getElementById("zonesContainer");
+      container.innerHTML = "";
+      GRAPH_DATA.zones.forEach((z) => {
+        const box = document.createElement("div");
+        box.className = "zone-box";
+        box.style.left = z.x + "px";
+        box.style.top = z.y + "px";
+        box.style.width = z.w + "px";
+        box.style.height = z.h + "px";
+        box.innerHTML = `<div class="zone-title">${z.label}</div>`;
+        container.appendChild(box);
+      });
+    }
+
+    function renderNodes() {
+      const container = document.getElementById("nodesContainer");
+      container.innerHTML = "";
+
+      GRAPH_DATA.nodes.forEach((n) => {
+        const el = document.createElement("div");
+        el.className = "flow-node";
+        el.id = "node_" + n.id;
+        el.setAttribute("data-status", n.status);
+        el.style.left = n.x + "px";
+        el.style.top = n.y + "px";
+        el.style.width = n.w + "px";
+
+        el.innerHTML = `
+          <div class="node-header">
+            <span class="node-category">${n.category}</span>
+            <span class="node-status-tag ${n.status}">
+              ${n.status === 'done' ? '【已实现】' : (n.status === 'todo' ? '【待开发】' : (n.status === 'unrealized' ? '【未实现】' : '【展望中】'))}
+            </span>
+          </div>
+          <div class="node-title-text">${n.title}</div>
+          <div class="node-subtext">${n.subtext}</div>
+          <div class="node-badge-row">
+            ${(n.tags || []).map(t => `<span style="background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 2px;">${t}</span>`).join("")}
+          </div>
+        `;
+
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectNode(n.id);
+        });
+
+        container.appendChild(el);
+      });
+    }
+
+    // ==========================================================
+    // 拓扑连线计算与 SVG 渲染
+    // ==========================================================
+    let connectionLines = [];
+
+    function getColorForType(type) {
+      if (type === "purple") return "var(--neon-purple)";
+      if (type === "green") return "var(--neon-green)";
+      if (type === "amber") return "var(--neon-amber)";
+      if (type === "red") return "var(--neon-red)";
+      return "var(--neon-cyan)";
+    }
+
+    function getHexForType(type) {
+      if (type === "purple") return "#b026ff";
+      if (type === "green") return "#00ff9d";
+      if (type === "amber") return "#ffb700";
+      if (type === "red") return "#ff2a5f";
+      return "#00f0ff";
+    }
+
+    function calculateConnections() {
+      svgConnections.innerHTML = "";
+      connectionLines = [];
+
+      const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      ["cyan", "green", "amber", "red", "purple"].forEach((colorKey) => {
+        const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+        marker.setAttribute("id", "arrow_" + colorKey);
+        marker.setAttribute("viewBox", "0 0 10 10");
+        marker.setAttribute("refX", "7");
+        marker.setAttribute("refY", "5");
+        marker.setAttribute("markerWidth", "6");
+        marker.setAttribute("markerHeight", "6");
+        marker.setAttribute("orient", "auto-start-reverse");
+
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", "M 0 1 L 10 5 L 0 9 z");
+        path.setAttribute("fill", getHexForType(colorKey));
+        marker.appendChild(path);
+        defs.appendChild(marker);
+      });
+      svgConnections.appendChild(defs);
+
+      GRAPH_DATA.connections.forEach((conn) => {
+        const fromNode = GRAPH_DATA.nodes.find(n => n.id === conn.from);
+        const toNode = GRAPH_DATA.nodes.find(n => n.id === conn.to);
+        if (!fromNode || !toNode) return;
+
+        let x1, y1, x2, y2;
+
+        if (toNode.x > fromNode.x + fromNode.w - 20) {
+          x1 = fromNode.x + fromNode.w;
+          y1 = fromNode.y + 40;
+          x2 = toNode.x;
+          y2 = toNode.y + 40;
+        } else if (fromNode.x > toNode.x + toNode.w - 20) {
+          x1 = fromNode.x;
+          y1 = fromNode.y + 40;
+          x2 = toNode.x + toNode.w;
+          y2 = toNode.y + 40;
+        } else {
+          x1 = fromNode.x + fromNode.w / 2;
+          y1 = fromNode.y + 80;
+          x2 = toNode.x + toNode.w / 2;
+          y2 = toNode.y;
+        }
+
+        const dx = Math.abs(x2 - x1);
+        const dy = Math.abs(y2 - y1);
+        let pathD;
+
+        if (Math.abs(y2 - y1) < 20) {
+          pathD = `M ${x1} ${y1} L ${x2} ${y2}`;
+        } else if (dx > dy) {
+          const cx1 = x1 + (x2 - x1) * 0.5;
+          const cy1 = y1;
+          const cx2 = x1 + (x2 - x1) * 0.5;
+          const cy2 = y2;
+          pathD = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+        } else {
+          const cx1 = x1;
+          const cy1 = y1 + (y2 - y1) * 0.5;
+          const cx2 = x2;
+          const cy2 = y1 + (y2 - y1) * 0.5;
+          pathD = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+        }
+
+        const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        pathEl.setAttribute("d", pathD);
+        pathEl.setAttribute("class", "conn-path");
+        pathEl.setAttribute("stroke", getColorForType(conn.type));
+        pathEl.setAttribute("marker-end", `url(#arrow_${conn.type})`);
+        pathEl.setAttribute("id", `edge_${conn.from}_${conn.to}`);
+        pathEl.style.stroke = getHexForType(conn.type);
+        svgConnections.appendChild(pathEl);
+
+        connectionLines.push({
+          from: conn.from,
+          to: conn.to,
+          type: conn.type,
+          label: conn.label,
+          pathD: pathD,
+          svgPath: pathEl,
+          length: pathEl.getTotalLength()
+        });
+
+        if (conn.label) {
+          const midPoint = pathEl.getPointAtLength(pathEl.getTotalLength() * 0.5);
+          const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+          const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          textEl.setAttribute("x", midPoint.x);
+          textEl.setAttribute("y", midPoint.y);
+          textEl.setAttribute("class", "edge-label-text");
+          textEl.textContent = conn.label;
+
+          const bbox = { width: conn.label.length * 11 + 12, height: 16 };
+          const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          rect.setAttribute("x", midPoint.x - bbox.width / 2);
+          rect.setAttribute("y", midPoint.y - bbox.height / 2);
+          rect.setAttribute("width", bbox.width);
+          rect.setAttribute("height", bbox.height);
+          rect.setAttribute("class", "edge-label-bg");
+
+          g.appendChild(rect);
+          g.appendChild(textEl);
+          svgConnections.appendChild(g);
+        }
+      });
+    }
+
+    // ==========================================================
+    // 动态流动光斑与脉冲粒子系统
+    // ==========================================================
+    class FlowParticle {
+      constructor(connIndex) {
+        this.connIndex = connIndex;
+        this.progress = Math.random();
+        this.speed = (0.003 + Math.random() * 0.0035);
+      }
+      update(mult) {
+        this.progress += this.speed * mult;
+        if (this.progress > 1) {
+          this.progress = 0;
+        }
+      }
+    }
+
+    let particles = [];
+    const PARTICLES_PER_CONN = 2;
+
+    function initFlowParticles() {
+      particles = [];
+      connectionLines.forEach((conn, idx) => {
+        for (let i = 0; i < PARTICLES_PER_CONN; i++) {
+          const p = new FlowParticle(idx);
+          p.progress = (i / PARTICLES_PER_CONN) + Math.random() * 0.2;
+          particles.push(p);
+        }
+      });
+    }
+
+    function animateFlow() {
+      ctx.clearRect(0, 0, canvasFlow.width, canvasFlow.height);
+
+      if (flowSpeedMultiplier > 0) {
+        particles.forEach((p) => {
+          const conn = connectionLines[p.connIndex];
+          if (!conn || !conn.svgPath) return;
+
+          if (selectedNodeId && conn.from !== selectedNodeId && conn.to !== selectedNodeId) {
+            return;
+          }
+
+          p.update(flowSpeedMultiplier);
+
+          const distance = p.progress * conn.length;
+          const pt = conn.svgPath.getPointAtLength(distance);
+          const colorHex = getHexForType(conn.type);
+
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3.8, 0, Math.PI * 2);
+          ctx.fillStyle = colorHex;
+          ctx.shadowColor = colorHex;
+          ctx.shadowBlur = 10;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        });
+      }
+
+      requestAnimationFrame(animateFlow);
+    }
+
+    // ==========================================================
+    // 节点聚焦、链路穿透与抽屉交互
+    // ==========================================================
+    function selectNode(nodeId) {
+      if (selectedNodeId === nodeId) {
+        selectedNodeId = null;
+        document.querySelectorAll(".flow-node").forEach(el => {
+          el.classList.remove("active-focus", "dimmed");
+        });
+        document.querySelectorAll(".conn-path").forEach(el => {
+          el.classList.remove("highlighted", "dimmed");
+        });
+        closeDrawer();
+        return;
+      }
+
+      selectedNodeId = nodeId;
+      const targetNode = GRAPH_DATA.nodes.find(n => n.id === nodeId);
+      if (!targetNode) return;
+
+      const relatedNodeIds = new Set([nodeId]);
+      const relatedEdgeIds = new Set();
+
+      GRAPH_DATA.connections.forEach(c => {
+        if (c.from === nodeId) {
+          relatedNodeIds.add(c.to);
+          relatedEdgeIds.add(`edge_${c.from}_${c.to}`);
+        }
+        if (c.to === nodeId) {
+          relatedNodeIds.add(c.from);
+          relatedEdgeIds.add(`edge_${c.from}_${c.to}`);
+        }
+      });
+
+      document.querySelectorAll(".flow-node").forEach(el => {
+        const id = el.id.replace("node_", "");
+        if (id === nodeId) {
+          el.classList.add("active-focus");
+          el.classList.remove("dimmed");
+        } else if (relatedNodeIds.has(id)) {
+          el.classList.remove("active-focus", "dimmed");
+        } else {
+          el.classList.add("dimmed");
+          el.classList.remove("active-focus");
+        }
+      });
+
+      document.querySelectorAll(".conn-path").forEach(el => {
+        if (relatedEdgeIds.has(el.id)) {
+          el.classList.add("highlighted");
+          el.classList.remove("dimmed");
+        } else {
+          el.classList.add("dimmed");
+          el.classList.remove("highlighted");
+        }
+      });
+
+      openDrawer(targetNode);
+    }
+
+    function openDrawer(node) {
+      const drawer = document.getElementById("tacticalDrawer");
+      const titleEl = document.getElementById("drawerTitle");
+      const contentEl = document.getElementById("drawerContent");
+
+      titleEl.innerHTML = `${node.title}`;
+
+      contentEl.innerHTML = `
+        <div class="info-card" style="border-left: 4px solid var(--neon-cyan);">
+          <div style="font-weight: 700; color: var(--neon-cyan); margin-bottom: 4px;">📌 核心职责与业务契约</div>
+          <div>${node.subtext}</div>
+          <div style="margin-top: 6px; color: var(--text-muted); font-size: 12px;">${node.desc}</div>
+        </div>
+
+        <div class="info-card">
+          <div style="font-weight: 700; color: var(--neon-amber); margin-bottom: 4px;">📂 落地代码与配置入口</div>
+          <div class="info-code">${node.code}</div>
+        </div>
+
+        <div class="info-card">
+          <div style="font-weight: 700; color: var(--neon-green); margin-bottom: 4px;">🔍 关键标签与运行凭据</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+            ${(node.tags || []).map(t => `<span style="background: rgba(0,255,157,0.1); border: 1px solid var(--neon-green); color: var(--neon-green); padding: 2px 6px; border-radius: 3px; font-family: var(--font-mono); font-size: 11px;">${t}</span>`).join("")}
+          </div>
+        </div>
+
+        <div class="info-card" style="border-left: 4px solid var(--neon-red);">
+          <div style="font-weight: 700; color: var(--neon-red); margin-bottom: 4px;">🛡️ 风控铁律与隔离约定</div>
+          <div style="color: #ff99aa; font-size: 12px;">
+            • 蜂窝与星辰出口端口号与 Antigravity 7 账号绑定固化，严禁换段。<br>
+            • DPAPI 硬件级加密凭据严禁在日志、MCP 或 Git 中打印明文。<br>
+            • 本地私有反代端点强制 0ms 回环，严防海外代理绕路死锁。<br>
+            • 涉及线下碰面/借钱资金 100% 熔断向主人摇人，严禁擅自答应。
+          </div>
+        </div>
+      `;
+
+      drawer.classList.add("open");
+    }
+
+    function closeDrawer() {
+      document.getElementById("tacticalDrawer").classList.remove("open");
+    }
+
+    document.getElementById("btnCloseDrawer").addEventListener("click", closeDrawer);
+
+    // ==========================================================
+    // 实施状态过滤逻辑
+    // ==========================================================
+    document.querySelectorAll(".pill-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".pill-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentFilter = btn.dataset.filter;
+
+        document.querySelectorAll(".flow-node").forEach(el => {
+          const status = el.getAttribute("data-status");
+          if (currentFilter === "all" || status === currentFilter) {
+            el.classList.remove("dimmed");
+          } else {
+            el.classList.add("dimmed");
+          }
+        });
+      });
+    });
+
+    document.querySelectorAll(".speed-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".speed-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        flowSpeedMultiplier = parseFloat(btn.dataset.speed);
+      });
+    });
+
+    document.getElementById("btnResetView").addEventListener("click", resetView);
+
+    // ==========================================================
+    // 初始化启动
+    // ==========================================================
+    window.addEventListener("DOMContentLoaded", () => {
+      canvasFlow.width = 4400;
+      canvasFlow.height = 2400;
+
+      renderZones();
+      renderNodes();
+      calculateConnections();
+      initFlowParticles();
+      animateFlow();
+      resetView();
+    });
+
+    window.addEventListener("resize", () => {
+      resetView();
+    });
+  </script>
+</body>
+</html>

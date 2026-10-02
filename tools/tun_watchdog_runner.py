@@ -84,6 +84,16 @@ def main():
     try:
         while True:
             try:
+                if args.personal:
+                    from core.personal_route_state import desired_on
+                    if not desired_on():
+                        state = controller.status()
+                        result = stop_personal_kernel() if state.get('tun_enabled') is True else None
+                        print(json.dumps({'controller': state, 'decision': {'action': 'personal_desired_off', 'restart': False, 'stop_result': result}}, ensure_ascii=False), flush=True)
+                        if args.once:
+                            return 0
+                        stop.wait(args.interval)
+                        continue
                 evidence, state = collect(controller, baseline)
                 decision = dog.observe(evidence)
                 if personal_guard is not None:
