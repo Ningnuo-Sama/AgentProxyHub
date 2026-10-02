@@ -91,6 +91,8 @@
 - 续轮16在用户确认管理员会话后复核：`whoami /groups`为High；单实例直接启动候选时Meta网卡、198.18/分流路由、控制器`tun=true`和125端口均出现/正常，但Google HTTPS仍超时，严格验收仍为not_verified/退出码2。随后运行目录关闭快照热重载成功，TUN=false、Meta消失、125端口全通。正式状态已回退，未完成全量上线。
 - 续轮17再次发现正式内核曾意外退出，已恢复后再做单实例候选切换；结果与续轮16一致：TUN结构和125端口正常，Google超时。未换绑节点；随后已恢复正式配置，当前TUN关闭、125端口全通。
 
+- 续轮18对可用美国出口做只读/有限验证：MCP实测21012与21014 SOCKS5到Google:443均verified，延迟约0–1ms；当前AUTO-POOL活动为fw-21001。候选TUN启动后Meta/TUN=true、百度200，但系统HTTPS Google仍超时；尝试控制器切PERSONAL到21012返回HTTP400，未强行改组或换绑。已安全回退TUN=false、125端口全通。结论：节点局部SOCKS可通不等于系统TUN流量可用，仍需核查DNS/HTTPS路径和PERSONAL组配置后再上线。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
