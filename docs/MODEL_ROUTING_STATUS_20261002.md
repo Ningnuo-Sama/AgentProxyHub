@@ -24,7 +24,7 @@
 - Gemini 日常真实调用：成功，返回 `gemini-3.8-flash-tiered`。
 - GPT 最高事态真实调用：成功，返回 `gpt-6.1-sol`。
 - Gemini 故障模拟：确实进入 GLM 兜底分支。
-- GLM 重新核验：发现两条 DPAPI 金库条目（`zhipu.txt`、`智谱决策专用.txt`），分别单独使用目标模型 `glm-5.3-flash` 探测；两条均能成功访问 `/models` 且模型目录包含目标模型，但 `/chat/completions` 均返回 HTTP 429，错误码 1113：余额不足或无可用资源包。路由已固定优先使用 `智谱决策专用.txt`，不再误选普通条目；当前阻塞是智谱上游资源响应，不是模型 ID 或代码端点错误。
+- GLM 重新核验：发现两条 DPAPI 金库条目（`zhipu.txt`、`智谱决策专用.txt`）；此前两条旧凭据的 `glm-5.3-flash` 推理均返回 HTTP 429/1113。用户随后提供新凭据，已只更新 `智谱决策专用.txt` 的 DPAPI 密文；使用新凭据对 `glm-5.3-flash` 做一次最小真实调用，返回 `OK`，HTTP 成功。路由已固定优先使用该专用条目。
 - Flow-Tools 健康检查：HTTP 200；尚未提交媒体生成任务。
 - Python 编译：通过。
 - 全部现有 unittest：27/27 通过。
