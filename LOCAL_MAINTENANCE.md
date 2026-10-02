@@ -141,6 +141,8 @@
 
 - EVA源码适配层本轮隔离验证：启动源码tools/eva_h5_adapter.py临时监听8767（未重启任何现役mcp/业务mihomo），POST /api/route status返回个人controller未知、desired_on=false、process_running=false；POST stop返回ok=true、business_kernel_changed=false、label=出海介入；业务控制器仍tun=false。临时进程随后已停止。运行副本tools/eva_h5_adapter.py不存在/未部署，故不声称正式EVA已更新。
 
+- EVA前端动作已修正为向后端发送action=start/stop，不再发送旧mode=overseas/direct；仍保留文案出海介入/出海展開中。个人生命周期增加生产配置门禁：正式personal/config.yaml当前tun.enable=false时拒绝start（现场返回personal_config_not_ready），避免按钮伪成功或误开关闭候选；79测试通过、diff check通过。EVA启动脚本仍指向源码适配层，未正式部署/重启。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

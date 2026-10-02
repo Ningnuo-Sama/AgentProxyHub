@@ -18,9 +18,17 @@ class PersonalLifecycleTests(unittest.TestCase):
         self.assertFalse(result['desired_on'])
         self.assertEqual('出海介入', result['label'])
 
+    def test_start_refuses_disabled_candidate(self):
+        with patch.object(life, 'is_halted', return_value=False), \
+             patch.object(life, '_running', return_value=False), \
+             patch.object(Path, 'read_text', return_value='tun:\n  enable: false\n'):
+            result = life.start()
+        self.assertEqual('personal_config_not_ready', result['code'])
+
     def test_start_does_not_restart_running_personal(self):
         with patch.object(life, 'is_halted', return_value=False), \
              patch.object(life, '_running', return_value=True), \
+             patch.object(Path, 'read_text', return_value='tun:\n  enable: true\n'), \
              patch.object(life, 'set_desired') as set_state:
             result = life.start()
         self.assertEqual('personal_already_running', result['code'])

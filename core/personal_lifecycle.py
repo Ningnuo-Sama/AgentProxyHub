@@ -37,6 +37,13 @@ def start():
             return {'ok': False, 'code': 'manual_halt', 'label': '停止內核'}
         if not PERSONAL_CONFIG.exists():
             return {'ok': False, 'code': 'personal_config_missing'}
+        import yaml
+        try:
+            config = yaml.safe_load(PERSONAL_CONFIG.read_text(encoding='utf-8-sig')) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            return {'ok': False, 'code': 'personal_config_invalid'}
+        if config.get('tun', {}).get('enable') is not True:
+            return {'ok': False, 'code': 'personal_config_not_ready', 'verification': 'tun_disabled_candidate'}
         if _running():
             set_desired(True)
             return {'ok': True, 'code': 'personal_already_running', 'label': '出海展開中'}
