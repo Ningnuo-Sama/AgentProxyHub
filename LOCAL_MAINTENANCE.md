@@ -99,6 +99,8 @@
 
 - 续轮21生成固定PERSONAL=fw-21012（MCP先前实测该SOCKS到Google:443 verified）的TUN候选，正式mihomo `-t`通过；启用后Meta/198.18/分流路由/tun=true/125端口均正常，但Google HTTPS仍超时。Cloudflare HTTPS可达（200），说明不是所有海外TLS均失败；Google域名解析结果漂移，仍需专门DNS/Google路径诊断。已回退关闭TUN，125端口全通，未改绑定。
 
+- 2026-10-03 DNS差异诊断：新增只读 `tools/google_dns_diagnostic.py`，精确传curl参数、禁用环境代理，21012完整TLS+Google204连续两次成功（远端域名解析）；同端口本机DNS解析模式连续两次TLS超时。证明DNS解析路径差异是当前Google失败的具体候选根因，不再把SOCKS握手称作HTTPS验证。未改配置/重启内核，live TUN=false；全套54测试通过。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
