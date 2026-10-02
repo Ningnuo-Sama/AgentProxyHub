@@ -7,11 +7,22 @@ class PersonalGuardTests(unittest.TestCase):
     def test_unknown_three_times_stops_only_once(self):
         stop = Mock(return_value={'ok': True})
         guard = PersonalControllerGuard(stop)
+        guard.close_personal = stop
         for _ in range(2):
             self.assertEqual('controller_unknown', guard.observe({'ok': False})['action'])
         self.assertEqual('stop_personal_on_controller_loss', guard.observe({'ok': False})['action'])
         guard.observe({'ok': False})
         stop.assert_called_once()
+
+    def test_unknown_three_times_closes_desired_intent(self):
+        stop = Mock(return_value={'ok': True})
+        close = Mock(return_value={'ok': True, 'desired_on': False})
+        guard = PersonalControllerGuard(stop)
+        guard.close_personal = close
+        for _ in range(3):
+            guard.observe({'ok': False})
+        close.assert_called_once()
+        stop.assert_not_called()
 
     def test_manual_halt_never_invokes_callback(self):
         stop = Mock()

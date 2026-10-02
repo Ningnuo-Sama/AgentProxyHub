@@ -1,4 +1,9 @@
-"""个人控制器失联保护：只调用个人停止，不启动或干预业务内核。"""
+"""个人控制器失联保护：只关闭个人意图，不启动或干预业务内核。"""
+
+
+def close_personal_safely():
+    from .personal_route_state import close_personal
+    return close_personal()
 
 
 class PersonalControllerGuard:
@@ -6,6 +11,7 @@ class PersonalControllerGuard:
         if threshold < 3:
             raise ValueError('at_least_three_samples_required')
         self.stop_personal = stop_personal
+        self.close_personal = close_personal_safely
         self.threshold = threshold
         self.failures = 0
         self.latched = False
@@ -20,6 +26,6 @@ class PersonalControllerGuard:
         if self.failures < self.threshold or self.latched:
             return {'action': 'controller_unknown', 'failures': self.failures, 'latched': self.latched}
         self.latched = True
-        result = self.stop_personal()
+        result = self.close_personal()
         return {'action': 'stop_personal_on_controller_loss', 'result': result,
                 'business_kernel_changed': False}

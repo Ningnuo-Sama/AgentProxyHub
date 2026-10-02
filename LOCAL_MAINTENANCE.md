@@ -159,6 +159,8 @@
 
 - 浏览器真实验收完成：访问8768 EVA页面，按钮初始显示“出海介入”；真实点击后页面显示“出海展開中”，后端start返回personal_started且controller tun=true；再次点击后页面恢复“出海介入 / LINE: OFF”，stop成功。业务控制器始终tun=false，个人desired_on=false，79测试通过。未调用生成/付费接口。该闭环覆盖按钮及生命周期，但仍不覆盖Gemini真实SSE、UDP/QUIC和自然失联。
 
+- 生产看门狗自然失联演练：个人TUN曾真实启动（PID21704、desired_on=true），随后仅强制终止个人可执行文件；20秒后业务PID/控制器仍正常、业务TUN=false，但发现旧逻辑不会把desired_on固化为false。已修复PersonalControllerGuard三次失联调用close_personal（先原子落盘off再个人停止），80测试通过；关闭意图已现场重置false，看门狗任务重启运行。该演练证明未复活个人且业务不受影响，也记录了修复前缺口；修复后尚未再做自然失联重复演练。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
