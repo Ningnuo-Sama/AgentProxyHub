@@ -139,6 +139,8 @@
 
 - 生命周期入口补齐：新增personal_lifecycle，start/stop/status仅面向独立个人内核；start遇人工急停返回停止內核，日常stop先持久化desired_on=false再个人停止，status同时报告控制器/意图/进程，EVA /api/route按action接入并保留出海介入/出海展開中及停止內核标签语义。78测试、py_compile和diff检查通过；源码现场desired_on=false、个人进程不存在、业务TUN=false。正式EVA服务尚未重启加载源码，个人关闭配置不是可用生产TUN配置，不能声称按钮已上线。
 
+- EVA源码适配层本轮隔离验证：启动源码tools/eva_h5_adapter.py临时监听8767（未重启任何现役mcp/业务mihomo），POST /api/route status返回个人controller未知、desired_on=false、process_running=false；POST stop返回ok=true、business_kernel_changed=false、label=出海介入；业务控制器仍tun=false。临时进程随后已停止。运行副本tools/eva_h5_adapter.py不存在/未部署，故不声称正式EVA已更新。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
