@@ -47,6 +47,7 @@
 - 新增个人PERSONAL组与默认关闭TUN候选，125固定映射不变。真实内核 `-t` 校验通过。
 - 续轮1新增 `core/tun_watchdog.py` 本地故障判定：连续3次DNS/直连/本机服务异常才触发一次撤销回调，人工急停优先且不自动重启，单独海外代理失败不急停全部业务；5项新增测试通过，全套42项通过。当前仅判定模块，不是已部署常驻watchdog，探针与撤销执行器尚待接入。
 - 续轮2新增 `core/tun_controller.py` 真实控制器状态与仅撤销TUN执行器：显式禁用环境代理，凭据只读运行配置；不会停业务内核或改固定端口。现役读回TUN关闭，撤销返回already_disabled且未发送PATCH。新增4项测试，全套46项通过；常驻守护/真实开启仍未部署。
+- 续轮3新增 `tools/tun_watchdog_runner.py` 独立入口，有限DNS子进程探测、公网TCP与上线前可用本地服务检查，输出脱敏决策；`--once`实测现役TUN关闭、不重启内核。未安装成服务/计划任务；控制器失联导致TUN状态未知时仅报告监护降级，仍须管理员侧撤销路由后备路径，不能当作已完备保命闭环。
 - 当前会话是Windows Medium权限，审批禁用；无已验证APH特权服务。不借FlClash服务绕权限，TUN未开启，watchdog/Steam动态省流/镜像下载尚未实现。代码准备不等于上线。
 - 新代码回退标签 `pre-personal-tun-20261002`；运行配置、外置EVA页面、路由/DNS/系统代理快照位于 `D:\ProgramData\AgentProxyHub\backups\pre-personal-tun-20261002`。候选配置只存ProgramData，不进Git。
 - 修正适配层曾硬编码控制密钥：现从运行YAML读取。历史Git已有该密钥，需后续协调轮换，不能声称历史凭据已清除。
