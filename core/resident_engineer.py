@@ -159,9 +159,21 @@ class ResidentEngineer:
             after = self.health_check(ports or [21001, 21008, 22002, 39999, 21909])
             if after.get("ok") and all(row.get("open") for row in after.get("ports", [])):
                 break
-        return {"ok": bool(after.get("ok") and all(row.get("open") for row in after.get("ports", []))),
-                "action": "recover_mihomo", "before": before, "after": after,
-                "runner": str(runner_path), "paid_calls": False, "bindings_changed": False}
+        recovered = bool(after.get("ok") and all(row.get("open") for row in after.get("ports", [])))
+        result = {"ok": recovered, "action": "recover_mihomo", "before": before, "after": after,
+                  "runner": str(runner_path), "paid_calls": False, "bindings_changed": False}
+        if recovered:
+            # 统一放在实际恢复成功出口，覆盖MCP、EVA和其他本地调用；失败通知不阻塞内核。
+            try:
+                from core.alert_dispatch import notify_all
+                result["notifications"] = notify_all(
+                    "AgentProxyHub 内核已恢复，固定业务端口复核通过。",
+                    event_id="agentproxyhub-kernel-recovered-" + str(int(time.time())),
+                    emote="happy", motion="hop")
+            except Exception:
+                result["notifications"] = {"jingguanjia": False, "hermes_weixin": False,
+                                            "hermes_detail": {"status": "exception"}}
+        return result
 
     def prompt(self, template: str = "health_check", **values: Any) -> dict[str, Any]:
         if template not in PROMPT_TEMPLATES:

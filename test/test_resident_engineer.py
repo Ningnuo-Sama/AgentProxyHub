@@ -41,6 +41,20 @@ class ResidentEngineerTests(unittest.TestCase):
             self.assertEqual(denied["code"], "action_not_allowed")
             self.assertTrue(denied["recoverable"])
 
+    def test_recovery_notifications_are_attached_on_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            e = ResidentEngineer(Path(folder) / 'state.json')
+            with unittest.mock.patch.object(e, 'health_check', side_effect=[{'ok': False, 'ports': []}, {'ok': True, 'ports': [{'open': True}]}]), \
+                 unittest.mock.patch('core.resident_engineer.subprocess.run') as run, \
+                 unittest.mock.patch('core.resident_engineer.subprocess.Popen'), \
+                 unittest.mock.patch('core.alert_dispatch.notify_all', return_value={'hermes_weixin': True, 'jingguanjia': True}) as notify:
+                run.return_value = unittest.mock.Mock(returncode=0, stdout='0')
+                runner = Path(folder) / 'silent-run.bat'; runner.write_text('@echo off')
+                result = e.recover_mihomo(runner=str(runner), ports=[])
+            self.assertTrue(result['ok'])
+            self.assertTrue(result['notifications']['hermes_weixin'])
+            notify.assert_called_once()
+
     def test_recovery_rejects_second_owned_kernel(self):
         with tempfile.TemporaryDirectory() as folder:
             e = ResidentEngineer(Path(folder) / 'state.json')

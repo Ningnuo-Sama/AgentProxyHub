@@ -950,15 +950,9 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
         result["ok"] = False
         result["code"] = result.get("result", {}).get("code", "kernel_recovery_failed")
     if result.get("ok"):
-        try:
-            from core.alert_dispatch import notify_all
-            sent = notify_all(
-                "AgentProxyHub 内核死亡演练：驻场工程师已发现并恢复 mihomo，固定端口已复核。",
-                event_id="agentproxyhub-kernel-recovery-" + str(int(time.time())),
-                emote="happy", motion="hop")
-            result["notifications"] = sent
-        except Exception:
-            result["notifications"] = {"jingguanjia": False, "hermes_weixin": False}
+        # ResidentEngineer.recover_mihomo 是统一恢复出口，通知结果已在其 result 中。
+        result["notifications"] = result.get("result", {}).get(
+            "notifications", {"jingguanjia": False, "hermes_weixin": False})
     return result
 
 

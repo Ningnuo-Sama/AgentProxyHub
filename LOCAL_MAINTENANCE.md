@@ -93,6 +93,8 @@
 
 - 续轮18对可用美国出口做只读/有限验证：MCP实测21012与21014 SOCKS5到Google:443均verified，延迟约0–1ms；当前AUTO-POOL活动为fw-21001。候选TUN启动后Meta/TUN=true、百度200，但系统HTTPS Google仍超时；尝试控制器切PERSONAL到21012返回HTTP400，未强行改组或换绑。已安全回退TUN=false、125端口全通。结论：节点局部SOCKS可通不等于系统TUN流量可用，仍需核查DNS/HTTPS路径和PERSONAL组配置后再上线。
 
+- 续轮19修复恢复通知遗漏：将Hermes/鲸管家通知移入 `ResidentEngineer.recover_mihomo()` 的统一成功出口，MCP包装层改为复用结果，避免PowerShell/其他本地调用恢复成功却不通知或重复通知。新增回归测试，全套54项通过；未实际触发恢复/通知，不声称Hermes已送达。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
