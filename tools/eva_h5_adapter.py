@@ -104,7 +104,8 @@ def read_driver_cards():
     cards = []
     for item in bindings.get('antigravity_account_stickiness', []):
         email = item.get('account')
-        models = (quota.get(email) or {}).get('models') or []
+        account_data = quota.get(email) or {}
+        models = account_data.get('models') or []
         cards.append({'account': email, 'port': item.get('port'), 'node_name': item.get('node_name'), 'proxy_id': item.get('proxy_id'), 'models': models, 'quota_groups': (quota.get(email) or {}).get('quota_groups', (quota.get(email) or {}).get('_quota_groups', [])), 'mapping_source': 'antigravity_account_stickiness + local quota'})
     return {'ok': True, 'cards': cards, 'count': len(cards), 'secrets_excluded': True}
 
