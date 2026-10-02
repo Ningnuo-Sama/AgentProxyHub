@@ -45,6 +45,10 @@ def connections(pid):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--controller-loss-drill', action='store_true')
+    args = parser.parse_args()
     if is_halted() or TunController().status().get('tun_enabled') is not False:
         raise RuntimeError('unsafe_baseline')
     before = business_identity()
@@ -107,6 +111,20 @@ def main():
             rows = ps("@(Find-NetRoute -RemoteIPAddress '" + address + "' | Select-Object InterfaceAlias,DestinationPrefix) | ConvertTo-Json -Compress")
             routes.append({'address':address,'routes':rows})
         result['endpoint_routes'] = routes
+        if args.controller_loss_drill:
+            import socket
+            from core.personal_watchdog import PersonalControllerGuard
+            # 绑定但不listen，防止其他服务抢占故障注入端口。
+            with socket.socket() as reserved:
+                reserved.bind(('127.0.0.1', 0))
+                failed = TunController(config)
+                failed.base = 'http://127.0.0.1:' + str(reserved.getsockname()[1])
+                guard = PersonalControllerGuard(stop_personal_kernel)
+                decisions = []
+                for _ in range(3):
+                    decisions.append(guard.observe(failed.status(), manual_halt=is_halted()))
+                result['controller_loss_drill'] = decisions
+                result['personal_after_guard'] = TunController(config).status()
     finally:
         result['stop'] = stop_personal_kernel()
         time.sleep(2)
@@ -132,6 +150,11 @@ def main():
         result['existing_connections_retained_after'] == result['existing_connections_before'])
     _, account_after = bound_ports()
     result['account_config_unchanged'] = account_digest == account_after
+    result['controller_loss_drill_verified'] = (not args.controller_loss_drill or (
+        len(result.get('controller_loss_drill', [])) == 3 and
+        result['controller_loss_drill'][-1].get('action') == 'stop_personal_on_controller_loss' and
+        result['controller_loss_drill'][-1].get('result', {}).get('ok') is True and
+        result.get('personal_after_guard', {}).get('ok') is False))
     result['gemini_noninterference_verified'] = False
     print(json.dumps(result, ensure_ascii=False))
     # 退出码仅代表这组有限双探针，不是Gemini/UDP或全量上线验收。
@@ -140,7 +163,7 @@ def main():
                  result['endpoint_routes_physical'] and result['stop'].get('ok') and
                  all(result.get('persistent_' + phase, {}).get('ok') for phase in ('before', 'during', 'after')) and
                  all(row['ok'] for row in result.get('account_exits_during', [])) and
-                 result['account_config_unchanged'] and
+                 result['account_config_unchanged'] and result['controller_loss_drill_verified'] and
                  result['personal_adapters_after'] == 0 and result['personal_routes_after'] == 0) else 2
 
 
