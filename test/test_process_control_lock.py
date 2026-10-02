@@ -18,6 +18,24 @@ class ControlLockTests(unittest.TestCase):
             with process_control_lock(path, timeout=.2):
                 pass
 
+    def test_thread_wait_is_bounded(self):
+        import threading
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'control.lock'
+            outcomes = []
+            def compete():
+                try:
+                    with process_control_lock(path, timeout=.1):
+                        outcomes.append('acquired')
+                except TimeoutError:
+                    outcomes.append('timed_out')
+            with process_control_lock(path):
+                thread = threading.Thread(target=compete)
+                thread.start()
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(['timed_out'], outcomes)
+
     def test_real_child_cannot_acquire_until_released(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'control.lock'

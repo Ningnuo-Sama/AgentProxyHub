@@ -17,7 +17,10 @@ def process_control_lock(path=None, timeout=25):
         raise RuntimeError('windows_control_lock_required')
     import msvcrt
     target = Path(path or LOCK_FILE)
-    with _THREAD_LOCK:
+    deadline = time.monotonic() + max(0, timeout)
+    if not _THREAD_LOCK.acquire(timeout=max(0, timeout)):
+        raise TimeoutError('kernel_control_thread_lock_busy')
+    try:
         depth = getattr(_LOCAL, 'depth', 0)
         if depth:
             if getattr(_LOCAL, 'path', None) != str(target):
@@ -32,7 +35,6 @@ def process_control_lock(path=None, timeout=25):
         with target.open('a+b', buffering=0) as handle:
             if handle.seek(0, 2) == 0:
                 handle.write(b'0')
-            deadline = time.monotonic() + timeout
             while True:
                 handle.seek(0)
                 try:
@@ -51,3 +53,5 @@ def process_control_lock(path=None, timeout=25):
                 _LOCAL.path = None
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        _THREAD_LOCK.release()

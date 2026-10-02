@@ -208,10 +208,11 @@ class Handler(BaseHTTPRequestHandler):
             if origin not in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121'}:
                 return self.send_json(403, {'ok': False, 'code': 'trusted_http_origin_required'})
             from core.kernel_control import control_lock, emergency_stop
+            if path == '/api/core/stop':
+                # 急停自行先发布闩锁；外层不能先等待正常控制锁。
+                result = emergency_stop()
+                return self.send_json(200 if result['ok'] else 500, result)
             with control_lock():
-                if path == '/api/core/stop':
-                    result = emergency_stop()
-                    return self.send_json(200 if result['ok'] else 500, result)
                 from core.kernel_control import set_halt
                 set_halt(False)
                 result = tool_kernel_recovery({'ports': [21001, 21008, 22002, 21909]})
