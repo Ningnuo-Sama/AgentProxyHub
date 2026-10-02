@@ -163,6 +163,8 @@
 
 - 修复后自然失联复测：启动个人TUN返回personal_started/tun=true，单独终止个人进程，等待20秒（≥3个5秒看门狗采样）后desired_on=false、个人进程/控制器不存在；看门狗任务仍Running；业务tun=false、125固定端口全通。80测试及diff通过。修复后自然失联链路已闭环，未复活个人或重启业务。
 
+- UDP/QUIC边界实测：清理个人test-active临时配置（送回收站），保留关闭快照config-disabled-20261003-022944.yaml。个人TUN启动/控制器tun=true成功；通过21012 SOCKS5 UDP ASSOCIATE返回127.0.0.1:21012，但向223.5.5.5:53发送标准DNS UDP请求6秒超时；finally独立stop成功、desired_on=false、业务tun=false、125端口全通。结论：当前固定SOCKS UDP链路尚未验收，不能宣称Steam/QUIC/UDP可用；未修改业务配置/绑定，未调用付费服务。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
