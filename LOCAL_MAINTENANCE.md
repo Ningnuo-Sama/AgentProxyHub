@@ -67,6 +67,10 @@
 - 续轮6审计确认不放宽SAFE_PATHS、不在普通adapter复制含密钥配置到Program Files；应由受控特权服务完成ACL、原子复制、哈希/disabled/125映射校验后再调用PUT。当前未实现该特权服务，故不宣称回滚闭环。
 - 安全审查提交417b822修复adapter同进程start/stop串行、拒绝空/null Origin的core写操作、启动失败重新置人工闩锁；不是跨进程锁，也不是用户认证。全套测试新增到50项，真实TUN仍关闭。
 
+- 续轮7在High会话中新增 `tools/prepare_runtime_rollback.py`：对ProgramData关闭TUN快照做disabled/125 listener映射校验、SHA-256记录、临时文件原子替换到运行目录。运行目录快照PUT热重载实测成功，读回TUN=false。
+- 隔离候选再次启动实测出现 `Meta` 网卡，但无198.18/分流路由可证；没有把网卡存在当成完整上线。已停止候选并恢复正式配置，21909正常，125固定端口全部TCP通过，live TUN=false。
+- 候选进程参数与现役进程短时重叠，暴露单实例启动门禁仍需加强；后续必须先确认旧进程退出和21909释放，再启动候选。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
