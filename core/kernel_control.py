@@ -1,0 +1,43 @@
+"""人工急停只管理 APH 自有内核；不借用第三方服务或提升权限。"""
+import json
+import os
+import subprocess
+from pathlib import Path
+
+HALT_FILE = Path(r'D:\ProgramData\AgentProxyHub\control\manual-halt.json')
+OWNED_EXE = r'D:\Program Files\AgentProxyHub\bin\mihomo.exe'
+
+
+def is_halted():
+    return HALT_FILE.exists()
+
+
+def set_halt(enabled):
+    HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if enabled:
+        temporary = HALT_FILE.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'manual_halt': True}), encoding='utf-8')
+        os.replace(temporary, HALT_FILE)
+    elif HALT_FILE.exists():
+        # 保留历史文件，只将有效闩锁移到非生效审计文件。
+        os.replace(HALT_FILE, HALT_FILE.with_suffix('.released.json'))
+
+
+def emergency_stop():
+    set_halt(True)
+    # 白名单按 executable 精确匹配，绝不 taskkill /im mihomo.exe。
+    command = r'''$ErrorActionPreference='Stop'
+$owned='D:\Program Files\AgentProxyHub\bin\mihomo.exe'
+$targets=Get-CimInstance Win32_Process -Filter "Name='mihomo.exe'" | Where-Object {$_.ExecutablePath -eq $owned}
+foreach($p in $targets){Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop}
+$remaining=@(Get-CimInstance Win32_Process -Filter "Name='mihomo.exe'" | Where-Object {$_.ExecutablePath -eq $owned})
+if($remaining.Count -gt 0){throw 'owned_kernel_still_running'}
+# 用户主动急停：取消当前用户系统代理及PAC；不修改第三方网卡、DNS和路由。
+Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
+Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name AutoConfigURL -Value ''
+'''
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command], capture_output=True, timeout=20)
+    return {'ok': result.returncode == 0, 'manual_halt': True,
+            'code': 'owned_kernel_stopped' if result.returncode == 0 else 'emergency_stop_failed',
+            'error': None if result.returncode == 0 else '检查权限及本地急停日志；闩锁仍保持，禁止自动复活',
+            'third_party_kernels_changed': False}

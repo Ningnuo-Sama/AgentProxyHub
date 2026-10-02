@@ -125,10 +125,16 @@ class ResidentEngineer:
     def recover_mihomo(self, *, runner: str | os.PathLike[str], wait_seconds: float = 12.0,
                        ports: list[int] | None = None) -> dict[str, Any]:
         """Safely restart the known mihomo runner and verify fixed local ports."""
+        from core.kernel_control import is_halted
+        if is_halted():
+            return {"ok": False, "code": "manual_halt", "recoverable": False}
         runner_path = Path(runner)
         if not runner_path.exists():
             return {"ok": False, "code": "runner_missing", "runner": str(runner_path), "recoverable": True}
         before = self.health_check(ports or [21001, 21008, 22002, 39999, 21909])
+        if before.get("ok") and before.get("ports") and all(row.get("open") for row in before["ports"]):
+            return {"ok": True, "action": "already_running", "before": before, "after": before,
+                    "paid_calls": False, "bindings_changed": False}
         try:
             subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent),
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

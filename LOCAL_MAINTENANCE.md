@@ -39,6 +39,16 @@
 - 2026-10-01 用户拍板 Agent 全自动化方向：长期凭据金库为必选后台但可由检修开关关闭；允许 Agent 自动换绑、自动调用 Hermes A 方案微信告警；Gemini 与 GLM 权限等同，均可用于排障判定和审核；所有模型/渠道检查允许执行；CLIProxyAPI 纳入后续渠道纳管；调试能力集中到检修/调试面板，主面板以展示为主。凭据资料已用 Windows DPAPI CurrentUser 加密归档到 `D:\ProgramData\AgentProxyHub\credentials\vault`，未把明文写入 Git。提交 `10db8db`、`ffdb00c`。
 - 2026-09-29 迁移完成（提交 `de5081e`）：`core/gen-config.ps1` 建池引擎落地并反转 `sync_nodes.py` 为自有建池维护（`--rebuild` 触发重建）；面板以蜂窝 1804 行成熟双视图版为底并入场景靶场与批量导出，**按用户决定移除四国 i18n，界面纯中文**。已部署 `D:\Program Files\AgentProxyHub` 并完成运行数据迁移；内核切至本项目 `bin\mihomo.exe`（geosite/geoip 需同时存在于运行根目录）；开机自启快捷方式由「蜂窝出口桥接」换为「AgentProxyHub」；旧蜂窝面板进程已退出。端口段 21001-21080 / 22001-22045 未变，Antigravity 7 账号粘性绑定实测全部连通。验收：`Parser::ParseFile` 通过、125 端口池生成正确、7 绑定端口 curl 实测有出口、`mcp/test_mcp.py` 5/5 通过、面板实机启动 `logs\panel.log` 正常。**FengWoBridge 自此退役**：`D:\Program Files\FengWoBridge` 目录整体原样保留作回滚，上游「蜂窝加速器」客户端（`FengWo` 进程）仍需保持运行作为出口上游，不属于退役对象。
 
+## 2026-10-02 个人 TUN 接入准备（未上线）
+
+- 原按钮文案是 `出海介入` / `出海展開中`；`停止內核` / `啟動內核` 为独立人工急停。
+- 更正旧说明：固定125个SOCKS监听器绑定具体节点，rule模式切GLOBAL不会改变这些端口或MATCH规则。不得用GLOBAL冒充系统代理开关。
+- EVA原停止调用health而不是真停止；源码现补定向急停接口和人工闩锁。恢复入口检查闩锁并抑制已存活内核重复启动；尚未演练停掉现役业务。
+- 新增个人PERSONAL组与默认关闭TUN候选，125固定映射不变。真实内核 `-t` 校验通过；单元测试37项通过。
+- 当前会话是Windows Medium权限，审批禁用；无已验证APH特权服务。不借FlClash服务绕权限，TUN未开启，watchdog/Steam动态省流/镜像下载尚未实现。代码准备不等于上线。
+- 新代码回退标签 `pre-personal-tun-20261002`；运行配置、外置EVA页面、路由/DNS/系统代理快照位于 `D:\ProgramData\AgentProxyHub\backups\pre-personal-tun-20261002`。候选配置只存ProgramData，不进Git。
+- 修正适配层曾硬编码控制密钥：现从运行YAML读取。历史Git已有该密钥，需后续协调轮换，不能声称历史凭据已清除。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

@@ -13,7 +13,10 @@ from core.model_router import complete, status as model_status
 from core.alert_dispatch import notify_all
 
 MIHOMO_CONTROLLER = 'http://127.0.0.1:21909'
-MIHOMO_HEADERS = {'Authorization': 'Bearer f8fac3fd419ea0b765a238e0'}
+# 认证只读正式运行配置，不把控制密钥写进源码。
+import yaml
+_runtime_config = yaml.safe_load(Path(r'D:\Program Files\AgentProxyHub\config\config.yaml').read_text(encoding='utf-8-sig'))
+MIHOMO_HEADERS = {'Authorization': 'Bearer ' + str(_runtime_config.get('secret', ''))}
 UPSTREAMS = {
     'flow': 'http://127.0.0.1:8001/health',
     'gemini': 'http://127.0.0.1:8045/health',
@@ -191,10 +194,23 @@ class Handler(BaseHTTPRequestHandler):
             ], 'edges': [['aph','mihomo'],['aph','gemini'],['aph','flow'],['aph','pet'],['aph','hermes'],['aph','viking']], 'autonomy': autonomy})
         return self.send_json(404, {'ok': False, 'code': 'not_found'})
     def do_POST(self):
+        # 不允许 file:// 的不透明来源调用急停/启动等写操作；请通过本地HTTP界面控制。
+        origin = self.headers.get('Origin', '')
+        if origin and origin not in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121'}:
+            return self.send_json(403, {'ok': False, 'code': 'trusted_http_origin_required'})
         path = urlparse(self.path).path
         length = int(self.headers.get('Content-Length', '0'))
         try: body = json.loads(self.rfile.read(length) or b'{}')
         except Exception: body = {}
+        if path == '/api/core/stop':
+            from core.kernel_control import emergency_stop
+            result = emergency_stop()
+            return self.send_json(200 if result['ok'] else 500, result)
+        if path == '/api/core/start':
+            from core.kernel_control import set_halt
+            set_halt(False)
+            result = tool_kernel_recovery({'ports': [21001, 21008, 22002, 21909]})
+            return self.send_json(200, result)
         if path == '/api/task':
             task = body.get('task')
             if task not in ALLOWED_TASKS: return self.send_json(403, {'ok': False, 'code':'task_not_allowed'})
@@ -212,15 +228,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/recovery':
             return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
         if path == '/api/route':
-            mode = str(body.get('mode') or '').strip().lower()
-            if mode not in {'overseas', 'direct'}: return self.send_json(400, {'ok': False, 'code': 'invalid_route_mode'})
-            group = str(body.get('group') or 'GLOBAL')
-            target = 'AUTO-POOL' if mode == 'overseas' else 'DIRECT'
-            try:
-                result = mihomo_put('/proxies/' + quote(group, safe='') , {'name': target})
-                return self.send_json(200, {'ok': True, 'mode': mode, 'group': group, 'target': target, 'result': result, 'gateway': read_gateway_state()})
-            except Exception as exc:
-                return self.send_json(502, {'ok': False, 'code': 'route_switch_failed', 'error': type(exc).__name__})
+            # GLOBAL 在 rule 模式不控制个人分流；新方案尚未通过特权服务上线，禁止伪成功。
+            from core.personal_route import start
+            return self.send_json(409, start())
         if path == '/api/command':
             command = str(body.get('command') or '').strip().lower()
             if command not in ALLOWED_COMMANDS: return self.send_json(403, {'ok': False, 'code':'command_not_allowed', 'allowed': sorted(ALLOWED_COMMANDS)})

@@ -946,6 +946,9 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     from core.resident_engineer import ResidentEngineer
     runner = args.get("runner") or r"D:\Program Files\AgentProxyHub\silent-run.bat"
     result = ResidentEngineer().dispatch("recover_mihomo", {"runner": runner, "wait_seconds": args.get("wait_seconds", 12), "ports": args.get("ports")})
+    if result.get("ok") and not result.get("result", {}).get("ok", False):
+        result["ok"] = False
+        result["code"] = result.get("result", {}).get("code", "kernel_recovery_failed")
     if result.get("ok"):
         try:
             from core.alert_dispatch import notify_all
