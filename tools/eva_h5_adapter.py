@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # EVA H5 本地适配层：只在 loopback 提供脱敏状态和已登记任务，不暴露凭据。
 import json, os, sys, urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +18,22 @@ UPSTREAMS = {
     'pet': 'http://127.0.0.1:8766/health',
 }
 ALLOWED_TASKS = {'scan_orphans', 'audit_log', 'clean_all_safe_orphans'}
+LOG_SOURCES = {
+    'mihomo': Path(r'D:\Program Files\AgentProxyHub\logs\bridge.log'),
+    'hermes': Path(r'D:\Program Files (x86)\hermes\logs\gateway.log'),
+    'hermes_watchdog': Path(r'D:\Program Files (x86)\hermes\logs\gateway-watchdog.log'),
+    'usage': Path(r'D:\Program Files\AgentProxyHub\data\model_usage.jsonl'),
+    'autonomy': Path(r'D:\Program Files\AgentProxyHub\data\autonomy_events.jsonl'),
+}
+
+def read_log_source(name, limit=80):
+    path = LOG_SOURCES.get(name)
+    if not path or not path.exists(): return {'name': name, 'available': False, 'lines': []}
+    try:
+        lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+        return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]} 
+    except OSError as exc:
+        return {'name': name, 'available': False, 'error': type(exc).__name__, 'lines': []}
 
 def probe(url):
     try:
@@ -48,6 +65,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/models': return self.send_json(200, model_status())
         if path == '/api/health': return self.send_json(200, tool_channel_health({}))
         if path == '/api/autonomy': return self.send_json(200, tool_autonomy_action({'action':'status'}))
+        if path == '/api/logs':
+            names = [x.strip() for x in str(urlparse(self.path).query.replace('sources=', '')).split(',') if x.strip()] or list(LOG_SOURCES)
+            return self.send_json(200, {'ok': True, 'sources': [read_log_source(name, 100) for name in names]})
+        if path == '/api/usage':
+            from core.model_usage import usage_summary
+            return self.send_json(200, usage_summary())
         if path == '/api/topology':
             health = tool_channel_health({})
             autonomy = tool_autonomy_action({'action':'status'})
