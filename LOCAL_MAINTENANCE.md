@@ -137,6 +137,8 @@
 
 - 个人关闭意图持久化：新增personal_route_state，缺失/损坏默认off，close_personal在共用锁内先原子落盘off再只停个人，失败返回不隐藏；个人runner在off时不计失联、不重启，若读到TUN仍开则仅停止个人。75测试通过，--personal --once现场输出personal_desired_off。未接通EVA/启动入口、未安装常驻任务；控制器未知且off时的残余进程清理仍需生命周期完善。
 
+- 生命周期入口补齐：新增personal_lifecycle，start/stop/status仅面向独立个人内核；start遇人工急停返回停止內核，日常stop先持久化desired_on=false再个人停止，status同时报告控制器/意图/进程，EVA /api/route按action接入并保留出海介入/出海展開中及停止內核标签语义。78测试、py_compile和diff检查通过；源码现场desired_on=false、个人进程不存在、业务TUN=false。正式EVA服务尚未重启加载源码，个人关闭配置不是可用生产TUN配置，不能声称按钮已上线。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

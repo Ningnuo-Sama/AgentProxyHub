@@ -238,9 +238,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/recovery':
             return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
         if path == '/api/route':
-            # GLOBAL 在 rule 模式不控制个人分流；新方案尚未通过特权服务上线，禁止伪成功。
-            from core.personal_route import start
-            return self.send_json(409, start())
+            # 个人出海只操作独立内核；保留既有文案语义，不触碰125个业务监听。
+            action = str(body.get('action') or body.get('state') or '').lower()
+            from core.personal_lifecycle import start, stop, status
+            if action in {'start', 'on', 'enable', '出海展開中'}:
+                return self.send_json(200, start())
+            if action in {'stop', 'off', 'disable', '出海介入'}:
+                result = stop()
+                return self.send_json(200 if result.get('ok') else 500, result)
+            if action in {'status', 'query', ''}:
+                return self.send_json(200, status())
+            return self.send_json(400, {'ok': False, 'code': 'invalid_route_action', 'allowed': ['start', 'stop', 'status']})
         if path == '/api/command':
             command = str(body.get('command') or '').strip().lower()
             if command not in ALLOWED_COMMANDS: return self.send_json(403, {'ok': False, 'code':'command_not_allowed', 'allowed': sorted(ALLOWED_COMMANDS)})
