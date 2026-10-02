@@ -95,6 +95,8 @@
 
 - 续轮19修复恢复通知遗漏：将Hermes/鲸管家通知移入 `ResidentEngineer.recover_mihomo()` 的统一成功出口，MCP包装层改为复用结果，避免PowerShell/其他本地调用恢复成功却不通知或重复通知。新增回归测试，全套54项通过；未实际触发恢复/通知，不声称Hermes已送达。
 
+- 续轮20实测通知链路：`notify_all` 返回 `hermes_weixin=true`、Hermes CLI returncode 0/status sent；鲸管家本次超时返回false。该实测使用固定去重event_id且不含凭据；证明Hermes发送通道可用，但不等同于已触发一次真实内核恢复通知。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
