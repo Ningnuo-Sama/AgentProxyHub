@@ -151,6 +151,8 @@
 
 - EVA源码API二次实测未完成：直接启动时发现已有多个eva_h5_adapter候选进程/8767竞争，POST请求出现连接意外关闭及stop返回500；随后清点未发现仍监听8767的EVA适配层，个人desired_on=false/进程不存在，业务状态未受影响。未继续强杀不明宿主进程，也未把失败误判为个人TUN故障。正式入口仍需单实例管理和端口归属后再验收。
 
+- EVA单实例包装器：新增run-eva-adapter.ps1/.bat，启动前先健康复用8767，非健康占用则拒绝，不杀未知进程；无占用时启动源码适配层并轮询health。EVA前端启动脚本已改指向包装器。现场验证adapter_started、重复启动existing_healthy_adapter_reused、/api/route status可用，随后停止验证进程；业务TUN=false。79测试通过。正式前端脚本已改源码路径但未重启用户前端。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
