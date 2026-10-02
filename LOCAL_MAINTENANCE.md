@@ -183,6 +183,8 @@
 
 - Flow-Tools日志补接修正：根据源码确认正式任务日志位于C:\Users\1\AppData\Local\FlowTools\task-logs.json（最近500条任务，非Git源码目录）。新增flow_tasks源，读取时间、账号、操作、模型、成功/失败、耗时、通道，不读取凭据/产物URL/提示词正文；EVA浏览器实测出现[flow_tasks]任务记录。该文件当前更新时间较早，若Flow产生新任务会随文件刷新被下一轮读取。
 
+- 日志门卫清洗：在EVA适配层入口做轻量字段化清洗，不做复杂NLP、不阻塞采集。Flow任务统一为“账号 生成图片/生成视频 · 模型 · 成功/失败 · 耗时 · 通道”；Antigravity请求统一为“模型 请求 · 成功/失败 · HTTP状态 · 耗时”；Mihomo结构化time/level/msg压成“时间 · 消息”，其余源压缩空白并截断500字符。原始日志仍留在各自文件/数据库，EVA只展示清洗结果。flow_tasks与antigravity_requests现场输出验证，80测试通过。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
