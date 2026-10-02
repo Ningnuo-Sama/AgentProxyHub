@@ -69,9 +69,12 @@ class ResidentScheduler:
         if notify and self.notifier:
             text = f"AgentProxyHub 巡检：{health.get('status', 'unknown')}；事件 {summary.get('count', 0)} 条"
             try:
-                result["notified"] = bool(self.notifier(text, event_id=event["event_id"], emote="work", motion="wiggle"))
+                delivered = self.notifier(text, event_id=event["event_id"], emote="work", motion="wiggle")
+                result["notified"] = bool(delivered)
+                result["notification_delivery"] = delivered if isinstance(delivered, Mapping) else {"all": bool(delivered)}
             except Exception:
                 result["notified"] = False
+                result["notification_delivery"] = {"all": False, "status": "exception"}
         with self._lock:
             self._last_result = result
         return result

@@ -845,7 +845,7 @@ def _get_resident_scheduler():
             events=EventStore(),
             health_check=lambda: {"status": "ok", "source": "local_snapshot",
                                   "confidence_state": os.path.exists(CONFIDENCE_STATE_FILE)},
-            notifier=lambda text, **kwargs: all(notify_all(text, event_id=kwargs.get("event_id")).values()),
+            notifier=lambda text, **kwargs: notify_all(text, event_id=kwargs.get("event_id")),
             interval_seconds=float(os.environ.get("APHUB_RESIDENT_INTERVAL", "300")),
         )
     return _RESIDENT_SCHEDULER
