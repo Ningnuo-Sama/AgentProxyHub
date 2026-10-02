@@ -97,6 +97,8 @@
 
 - 续轮20实测通知链路：`notify_all` 返回 `hermes_weixin=true`、Hermes CLI returncode 0/status sent；鲸管家本次超时返回false。该实测使用固定去重event_id且不含凭据；证明Hermes发送通道可用，但不等同于已触发一次真实内核恢复通知。
 
+- 续轮21生成固定PERSONAL=fw-21012（MCP先前实测该SOCKS到Google:443 verified）的TUN候选，正式mihomo `-t`通过；启用后Meta/198.18/分流路由/tun=true/125端口均正常，但Google HTTPS仍超时。Cloudflare HTTPS可达（200），说明不是所有海外TLS均失败；Google域名解析结果漂移，仍需专门DNS/Google路径诊断。已回退关闭TUN，125端口全通，未改绑定。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
