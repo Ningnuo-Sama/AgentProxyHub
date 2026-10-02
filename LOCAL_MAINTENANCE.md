@@ -145,6 +145,8 @@
 
 - 个人开启候选安装：核对防回捕候选14条排除路由后，先将个人运行配置备份至personal/backups/config-disabled-20261003-022944.yaml，再写入同候选tun.enable=true；独立mihomo -t校验成功。未启动个人、desired_on仍false，看门狗--personal --once输出personal_desired_off；业务TUN=false、业务内核未重启。79测试通过。该配置含运行secret且在Program Files受控目录，不入Git；生产启动仍需单独生命周期/API验证与回退演练。
 
+- 正式个人生命周期闭环实测：源码personal_lifecycle.start启动已安装TUN=true候选，4秒后控制器21919报告tun_enabled=true/process_running=true/desired_on=true；系统Google204与显式21012 Google204均成功；stop只停个人并返回出海介入，随后个人控制器不可达、进程不存在、desired_on=false；业务控制器始终tun=false、业务PID未重启、125固定端口全通。79测试通过。已恢复个人关闭状态。仍未部署常驻看门狗/EVA正式适配层，未做Gemini/SSE/UDP全量验收。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
