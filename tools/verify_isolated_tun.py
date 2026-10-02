@@ -75,6 +75,12 @@ def main():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     if checked.returncode:
         raise RuntimeError('candidate_invalid')
+    from persistent_socks_probe import PersistentProbe
+    persistent = PersistentProbe()
+    result['persistent_before'] = persistent.request()
+    if not result['persistent_before']['ok']:
+        persistent.close()
+        print(json.dumps(result)); return 2
     existing_connections = connections(pid)
     result['existing_connections_before'] = len(existing_connections)
     try:
@@ -86,6 +92,7 @@ def main():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(3)
         result['personal'] = TunController(config).status()
+        result['persistent_during'] = persistent.request()
         result['socks_during'] = probe(True)
         result['system_during'] = probe()
         result['existing_connections_retained_during'] = len(existing_connections & connections(pid))
@@ -103,6 +110,12 @@ def main():
         result['personal_adapters_after'] = ps("@(Get-NetAdapter | Where-Object Name -eq 'APH-Personal').Count | ConvertTo-Json")
         result['personal_routes_after'] = ps("@(Get-NetRoute | Where-Object InterfaceAlias -eq 'APH-Personal').Count | ConvertTo-Json")
         result['existing_connections_retained_after'] = len(existing_connections & connections(pid))
+        try:
+            result['persistent_after'] = persistent.request()
+        except Exception as exc:
+            result['persistent_after'] = {'ok': False, 'error': type(exc).__name__}
+        finally:
+            persistent.close()
     physical = b['interface-name']
     result['endpoint_routes_physical'] = all(
         item['routes'] and all(row.get('InterfaceAlias') == physical for row in
@@ -118,6 +131,7 @@ def main():
     return 0 if (result.get('system_during', {}).get('ok') and
                  result.get('socks_during', {}).get('ok') and result['business_unchanged'] and
                  result['endpoint_routes_physical'] and result['stop'].get('ok') and
+                 all(result.get('persistent_' + phase, {}).get('ok') for phase in ('before', 'during', 'after')) and
                  result['personal_adapters_after'] == 0 and result['personal_routes_after'] == 0) else 2
 
 

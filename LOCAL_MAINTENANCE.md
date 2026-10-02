@@ -129,6 +129,8 @@
 
 - 双内核复验：演练配置改唯一文件名、增既有连接身份统计，收紧双HTTPS/物理路由/个人撤销退出门禁版本真实返回0；业务PID不变、个人网卡/路由0、系统及21012 Google204成功。35条既有连接开启期间保持32、退出后保持9，可能自然结束但未证明，不能据exit0声称长连接/Gemini无干扰。追加明确gemini_noninterference_verified=false及全连接保持布尔，py_compile/73测试通过（追加标识未再实跑）；业务TUN=false。
 
+- 持续连接实测：新增无重连PersistentProbe，经21012同一SOCKS+TLS socket在个人TUN开启前/期间/退出后均Google204、same_socket=true、服务器未要求关闭；收紧演练判据真实exit0。业务PID不变、上游WLAN、个人路由/网卡0；既有11条连接保持10条，不能断言其他连接为何结束。73回归通过，业务TUN=false。仅证明21012受控keep-alive，不等于所有账号/Gemini SSE/UDP验收。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
