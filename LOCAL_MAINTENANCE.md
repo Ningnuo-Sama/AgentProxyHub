@@ -143,6 +143,8 @@
 
 - EVA前端动作已修正为向后端发送action=start/stop，不再发送旧mode=overseas/direct；仍保留文案出海介入/出海展開中。个人生命周期增加生产配置门禁：正式personal/config.yaml当前tun.enable=false时拒绝start（现场返回personal_config_not_ready），避免按钮伪成功或误开关闭候选；79测试通过、diff check通过。EVA启动脚本仍指向源码适配层，未正式部署/重启。
 
+- 个人开启候选安装：核对防回捕候选14条排除路由后，先将个人运行配置备份至personal/backups/config-disabled-20261003-022944.yaml，再写入同候选tun.enable=true；独立mihomo -t校验成功。未启动个人、desired_on仍false，看门狗--personal --once输出personal_desired_off；业务TUN=false、业务内核未重启。79测试通过。该配置含运行secret且在Program Files受控目录，不入Git；生产启动仍需单独生命周期/API验证与回退演练。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

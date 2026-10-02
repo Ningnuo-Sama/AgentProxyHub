@@ -63,6 +63,8 @@ def main():
     args = parser.parse_args()
     if args.interval < 3:
         parser.error('interval must be at least 3 seconds')
+    if args.personal and not Path(r'D:\Program Files\AgentProxyHub\personal\config.yaml').exists():
+        parser.error('personal configuration missing')
     personal_guard = None
     if args.personal:
         from core.kernel_control import stop_personal_kernel
