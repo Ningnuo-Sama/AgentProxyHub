@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     AgentProxyHub & 蜂窝/星辰节点池智能健康巡检与风控守护引擎 (Pool-Guard)
 .DESCRIPTION
@@ -36,6 +36,10 @@ $AiTxtPath = Join-Path $ScriptDir "反重力-Gemini可用-socks5.txt"
 $AuditLogPath = Join-Path $ScriptDir "logs\pool-guard-audit.log"
 if (-not (Test-Path (Split-Path $AuditLogPath))) {
     New-Item -ItemType Directory -Path (Split-Path $AuditLogPath) -Force | Out-Null
+}
+
+if ($Mode -ne 'Inspect') {
+    throw "RefreshStandby/AutoGuard 已禁用：候选脚本不得直接写 Antigravity 私库；请使用 Hub 事务发布器"
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -238,17 +242,10 @@ if ($Mode -eq 'AutoGuard' -and $deadBound.Count -gt 0) {
         }
         
         if (-not $sub) {
-            # 无同国节点时选全局最快未绑定的纯净节点
-            foreach ($cand in ($sortedCandidates | Where-Object { -not $_.IsBound })) {
-                $tCheck = & curl.exe -s --max-time 4 --ssl-no-revoke -x socks5h://127.0.0.1:$($cand.Port) https://policies.google.com/terms 2>$null
-                $tStr = ($tCheck -join "`n")
-                $tGg = 'Unknown'
-                if ($tStr -match 'Country version:</a>\s*([^<]+)') { $tGg = $matches[1].Trim() }
-                if ($tGg -notin @('China', 'Hong Kong', 'Macao', 'Unknown')) {
-                    $sub = $cand
-                    break
-                }
-            }
+            # 严格同国策略：没有同国候选时必须升级，禁止跨国回退。
+            $msg = "账号 $($db.Email) 的绑定节点 $($db.Port) 无可验证同国替补；保持原绑定并升级人工处理"
+            Write-Warning $msg
+            $auditLogs += "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ESCALATE_NO_SAME_COUNTRY $msg"
         }
         
         if ($sub) {
@@ -342,19 +339,12 @@ if ($auditLogs.Count -gt 0) {
     Add-Content -Path $AuditLogPath -Value ($auditLogs -join "`r`n") -Encoding UTF8
 }
 
-# 如有变动或要求重启网关
+# 如有变动，不在守护脚本内强杀/重启现役 Antigravity。
+# 必须由有租约/健康检查/回退证据的专用发布器执行；这里只记录升级。
 if ($RestartGatewayIfChanged -and $needRestart) {
-    Write-Host "正在平滑重载 Antigravity Tools 网关进程..." -ForegroundColor Cyan
-    $procs = Get-Process -Name "antigravity-tools" -ErrorAction SilentlyContinue
-    if ($procs) {
-        foreach ($pr in $procs) {
-            try { taskkill /PID $pr.Id /T /F | Out-Null } catch {}
-        }
-        Start-Sleep -Seconds 2
-    }
-    Start-Process -FilePath "D:\Program Files\Antigravity Tools\antigravity-tools.exe" -WorkingDirectory "D:\Program Files\Antigravity Tools"
-    Start-Sleep -Seconds 3
-    Write-Host "网关重载完成！" -ForegroundColor Green
+    $msg = "检测到代理变更，但自动重启已禁用；请交由受控发布器排空租约后处理"
+    Write-Warning $msg
+    $auditLogs += "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ESCALATE_GATEWAY_RESTART $msg"
 }
 
 Write-Host "`n守护巡检与池子充盈全部完成！" -ForegroundColor Cyan

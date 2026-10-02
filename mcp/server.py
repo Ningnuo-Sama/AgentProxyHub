@@ -13,6 +13,10 @@ import time
 import socket
 from typing import Dict, Any, List, Optional
 
+# 账本唯一读写入口：保持与 CloakMulti 共写时的锁、revision 和原子回读语义一致。
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core"))
+from bindings_store import read as ledger_read, read_with_revision, bind as ledger_bind
+
 # 根目录定位
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
@@ -78,22 +82,11 @@ def get_scenes_data() -> List[Dict[str, Any]]:
     return []
 
 def get_bindings_data() -> Dict[str, Any]:
-    """读取环境与端口绑定记录"""
-    if os.path.exists(BINDINGS_FILE):
-        try:
-            with open(BINDINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-
-def save_bindings_data(data: Dict[str, Any]):
-    # 原子写：tmp + os.replace，读方即使不持锁也看不到半截 JSON
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = BINDINGS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, BINDINGS_FILE)
+    """通过唯一账本适配器读取环境与端口绑定记录。"""
+    try:
+        return ledger_read()
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
 
 
 def get_snapshot_info(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -342,25 +335,15 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
     if not profile or not port:
         return {"success": False, "error": "必须提供 profile 和 port 参数"}
 
-    with _bindings_lock():
-        bindings = get_bindings_data()
-        old = bindings.get(str(port))
-        if old and old.get("profile") != profile:
-            return {
-                "success": False,
-                "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
-            }
-
-        bindings[str(port)] = {
-            "profile": profile,
-            "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "note": note
-        }
-        save_bindings_data(bindings)
+    try:
+        result = ledger_bind(profile, int(port), note)
+    except (ValueError, RuntimeError, OSError) as exc:
+        return {"success": False, "error": str(exc)}
 
     return {
         "success": True,
-        "bound_port": port,
+        "revision": result["revision"],
+        "bound_port": int(port),
         "profile": profile,
         "socks5_url": f"socks5://127.0.0.1:{port}",
         "message": f"成功锁定环境 [{profile}] 对应出口端口 {port}，维持 IP 粘性。"
