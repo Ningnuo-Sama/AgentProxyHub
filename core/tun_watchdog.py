@@ -10,7 +10,7 @@ class Evidence:
     direct_ok: bool
     proxy_ok: bool
     local_services_ok: bool
-    tun_enabled: bool
+    tun_enabled: bool | None
     manual_halt: bool = False
 
 
@@ -28,7 +28,9 @@ class TunWatchdog:
         if evidence.manual_halt:
             self.latched = True
             return {'action': 'respect_manual_halt', 'restart': False}
-        if not evidence.tun_enabled:
+        if evidence.tun_enabled is None:
+            return {'action': 'controller_unknown', 'ok': False, 'restart': False}
+        if evidence.tun_enabled is False:
             self.failures = 0
             return {'action': 'tun_off', 'restart': False}
         if self.latched:

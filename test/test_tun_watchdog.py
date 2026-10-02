@@ -19,6 +19,10 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual(dog.observe(bad)['action'], 'await_manual_enable')
         self.assertEqual(calls, [1])
 
+    def test_unknown_state_not_reported_as_off(self):
+        dog = TunWatchdog(lambda: self.fail('unknown state cannot authorize mutation'))
+        self.assertEqual(dog.observe(self.evidence(controller_ok=False, tun_enabled=None))['action'], 'controller_unknown')
+
     def test_manual_halt_never_revives(self):
         dog = TunWatchdog(lambda: self.fail('rollback should not run'))
         self.assertEqual(dog.observe(self.evidence(manual_halt=True))['action'], 'respect_manual_halt')
