@@ -46,9 +46,10 @@ def build_candidate(config: Mapping[str, Any]) -> dict[str, Any]:
     groups = candidate.setdefault("proxy-groups", [])
     groups[:] = [g for g in groups if g.get("name") != PERSONAL_GROUP]
     groups.append({"name": PERSONAL_GROUP, "type": "select", "proxies": ["AUTO-POOL", "DIRECT"]})
-    # TUN must use remote DNS for overseas domains; domestic rules remain DIRECT.
+    # Candidate fake-IP preserves domain identity; DNS hijack is required for TUN.
+    # These defaults alone do not prove remote DoH routing or production readiness.
     dns = candidate.setdefault("dns", {})
-    dns.update({"enable": True, "enhanced-mode": "fake-ip", "fake-ip-filter": ["+.*.cn", "+.lan", "+.local"]})
+    dns.update({"enable": True, "enhanced-mode": "fake-ip", "fake-ip-filter": ["+.cn", "+.lan", "+.local"]})
     dns["nameserver"] = ["https://223.5.5.5/dns-query", "https://doh.pub/dns-query"]
     dns["proxy-server-nameserver"] = ["https://223.5.5.5/dns-query"]
     dns["fallback"] = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
@@ -57,7 +58,8 @@ def build_candidate(config: Mapping[str, Any]) -> dict[str, Any]:
     if candidate.get("find-process-mode") is False:
         candidate["find-process-mode"] = "off"
     tun = candidate.setdefault("tun", {})
-    tun.update({"enable": False, "auto-route": True, "auto-detect-interface": True})
+    tun.update({"enable": False, "auto-route": True, "auto-detect-interface": True,
+                "dns-hijack": ["any:53"]})
     # Do not invent strict-route or a platform-specific stack. Preserve an explicit
     # upstream setting, and leave unspecified settings to versioned kernel defaults.
     excluded = list(tun.get("route-exclude-address") or [])

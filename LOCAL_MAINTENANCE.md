@@ -103,6 +103,8 @@
 
 - 续轮22针对已证实DNS差异，在PERSONAL候选中加入fake-ip、国内过滤、DoH nameserver/proxy-server-nameserver及fallback；正式mihomo `-t`通过，全套54测试通过。仅写入ProgramData候选，未加载现役，需下一轮单实例实测Google并回退。
 
+- 2026-10-03最终续轮：为隔离21012候选补齐`dns-hijack: [any:53]`、gvisor和198.18地址，修正fake-ip-filter为`+.cn`；启动后严格验收首次返回 `tun_verified`/exit 0（百度200、Google204、Meta Up、分流路由、125端口全通），系统Google DNS返回198.18.0.12。finally中热重载关闭快照成功，随后确认tun=false、Meta网卡/路由数量均0、125端口全通。预检PowerShell读取不存在halt文件出现非终止错误；已核实统一is_halted为false（缺失表示未急停），后续必须用统一门禁而非裸Get-Content。源码补齐DNS劫持及回归断言，未部署正式常驻配置，UDP/Steam/独立watchdog/跨进程急停及失联回滚仍待完成。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
