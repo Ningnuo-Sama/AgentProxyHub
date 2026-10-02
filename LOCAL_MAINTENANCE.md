@@ -165,6 +165,8 @@
 
 - UDP/QUIC边界实测：清理个人test-active临时配置（送回收站），保留关闭快照config-disabled-20261003-022944.yaml。个人TUN启动/控制器tun=true成功；通过21012 SOCKS5 UDP ASSOCIATE返回127.0.0.1:21012，但向223.5.5.5:53发送标准DNS UDP请求6秒超时；finally独立stop成功、desired_on=false、业务tun=false、125端口全通。结论：当前固定SOCKS UDP链路尚未验收，不能宣称Steam/QUIC/UDP可用；未修改业务配置/绑定，未调用付费服务。
 
+- UDP失败归因对照：同机直连223.5.5.5:53的标准DNS UDP请求成功收到31字节响应，固定SOCKS UDP ASSOCIATE虽成功但经21012转发同请求6秒超时；故当前失败定位为BUSINESS-SOCKS/业务节点UDP转发或协议封装未验收，不是本机公网DNS整体不可达。个人desired_on=false、业务tun=false，未再启动个人。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
