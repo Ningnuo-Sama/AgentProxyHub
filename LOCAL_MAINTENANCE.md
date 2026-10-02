@@ -125,6 +125,8 @@
 
 - 防回捕覆盖补充：现场业务既有公网连接43.207.231.45与DoH 120.53.53.53，Find-NetRoute均为WLAN index9、网卡Up，业务TUN=false；源码清单扩展业务DoH/DoT endpoint及active_addresses，DNS域名解析缺失仍拒绝，localhost过滤保留。73测试通过；未生成新部署配置/开启TUN，开启后的真实选路尚未验证。
 
+- 双内核TUN首次受控实测：verify_isolated_tun有界刷新节点/DNS/既有连接，共12排除地址；个人开启TUN时系统Google204与显式21012远端解析Google204均成功，各现场端点Find-NetRoute保持WLAN；finally仅停止个人，个人网卡/路由均0，业务PID20788及创建时间不变、125端口全通、业务TUN=false。初次JSON单元素类型导致启动前拒绝，修复后完成演练。73回归通过。随后收紧工具退出判据并py_compile通过，未重跑改后版本；非全账号/UDP/Gemini流式/抓包验收，不能声称全量无干扰。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
