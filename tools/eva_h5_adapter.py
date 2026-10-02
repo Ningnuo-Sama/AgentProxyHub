@@ -82,9 +82,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/audit': return self.send_json(200, {'ok': True, 'result': tool_jingguanjia_orphan({'action':'audit_log','limit':30})})
         if path == '/api/models': return self.send_json(200, model_status())
         if path == '/api/health': return self.send_json(200, tool_channel_health({}))
+        if path == '/api/snapshot':
+            health = tool_channel_health({})
+            autonomy = tool_autonomy_action({'action':'status'})
+            quota = read_antigravity_quota()
+            from core.model_usage import usage_summary
+            return self.send_json(200, {'ok': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(), 'health': health, 'autonomy': autonomy, 'quota': quota, 'usage': usage_summary()})
         if path == '/api/autonomy': return self.send_json(200, tool_autonomy_action({'action':'status'}))
         if path == '/api/logs':
-            names = [x.strip() for x in str(urlparse(self.path).query.replace('sources=', '')).split(',') if x.strip()] or list(LOG_SOURCES)
+            query = parse_qs(urlparse(self.path).query)
+            names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or list(LOG_SOURCES)
             return self.send_json(200, {'ok': True, 'sources': [read_log_source(name, 100) for name in names]})
         if path == '/api/usage':
             from core.model_usage import usage_summary
