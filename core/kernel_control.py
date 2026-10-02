@@ -50,17 +50,26 @@ def is_halted():
 def set_halt(enabled):
     HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
     if enabled:
-        temporary = HALT_FILE.with_suffix('.tmp')
-        temporary.write_text(json.dumps({'manual_halt': True}), encoding='utf-8')
-        os.replace(temporary, HALT_FILE)
+        import tempfile
+        fd, name = tempfile.mkstemp(prefix='manual-halt-', suffix='.tmp', dir=HALT_FILE.parent)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump({'manual_halt': True}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(name, HALT_FILE)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
     elif HALT_FILE.exists():
         # 保留历史文件，只将有效闩锁移到非生效审计文件。
         os.replace(HALT_FILE, HALT_FILE.with_suffix('.released.json'))
 
 
 def emergency_stop():
+    # 急停意图先发布，不被正常启停/健康检查的持锁等待拖延。
+    set_halt(True)
     with control_lock():
-        set_halt(True)
         return _emergency_stop_locked()
 
 

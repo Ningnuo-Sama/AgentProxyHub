@@ -15,6 +15,13 @@ class TunController:
         self.opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def request(self, method, path, body=None):
+        if method.upper() != 'GET':
+            from core.kernel_control import control_lock
+            with control_lock():
+                return self._request_unlocked(method, path, body)
+        return self._request_unlocked(method, path, body)
+
+    def _request_unlocked(self, method, path, body=None):
         data = None if body is None else json.dumps(body).encode('utf-8')
         request = urllib.request.Request(self.base + path, data=data, method=method,
                                          headers={**self.headers, 'Content-Type': 'application/json'})

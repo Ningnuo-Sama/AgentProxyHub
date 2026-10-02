@@ -14,6 +14,9 @@ def check_preflight(config, *, executable, manual_halt, business_tun, occupied_p
         return {'ok': False, 'code': 'business_tun_not_confirmed_off'}
     if PureWindowsPath(executable) == BUSINESS_EXE:
         return {'ok': False, 'code': 'shared_executable_identity'}
+    from core.kernel_control import PERSONAL_EXE
+    if PureWindowsPath(executable) != PureWindowsPath(PERSONAL_EXE):
+        return {'ok': False, 'code': 'personal_executable_not_allowlisted'}
     if not emergency_stop_covers_personal:
         return {'ok': False, 'code': 'personal_emergency_stop_not_installed'}
     if config.get('listeners') or any(config.get(k) for k in

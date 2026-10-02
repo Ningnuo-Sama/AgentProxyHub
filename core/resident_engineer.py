@@ -124,7 +124,12 @@ class ResidentEngineer:
 
     def recover_mihomo(self, *, runner: str | os.PathLike[str], wait_seconds: float = 12.0,
                        ports: list[int] | None = None) -> dict[str, Any]:
-        """Safely restart the known mihomo runner and verify fixed local ports."""
+        """恢复与急停使用同一跨进程锁，避免检查后被人工急停却仍拉起。"""
+        from core.kernel_control import control_lock
+        with control_lock():
+            return self._recover_mihomo_locked(runner=runner, wait_seconds=wait_seconds, ports=ports)
+
+    def _recover_mihomo_locked(self, *, runner, wait_seconds=12.0, ports=None):
         from core.kernel_control import is_halted
         if is_halted():
             return {"ok": False, "code": "manual_halt", "recoverable": False}
@@ -147,6 +152,8 @@ class ResidentEngineer:
                         "before": before, "after": before}
             if runner_path.name.lower() not in ('silent-run.bat', '启动agentproxyhub.bat'):
                 return {"ok": False, "code": "runner_not_allowlisted", "recoverable": False}
+            if is_halted():
+                return {"ok": False, "code": "manual_halt", "recoverable": False}
             subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent),
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError as exc:

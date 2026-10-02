@@ -20,6 +20,10 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual('personal_emergency_stop_not_installed',
                          self.check(emergency_stop_covers_personal=False)['code'])
 
+    def test_arbitrary_personal_executable_refused(self):
+        self.assertEqual('personal_executable_not_allowlisted',
+                         self.check(executable=r'C:\other\mihomo.exe')['code'])
+
     def test_unknown_business_and_busy_port_refused(self):
         self.assertFalse(self.check(business_tun=None)['ok'])
         self.assertEqual('controller_conflict', self.check(occupied_ports=[21919])['code'])
