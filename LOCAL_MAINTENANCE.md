@@ -153,6 +153,8 @@
 
 - EVA单实例包装器：新增run-eva-adapter.ps1/.bat，启动前先健康复用8767，非健康占用则拒绝，不杀未知进程；无占用时启动源码适配层并轮询health。EVA前端启动脚本已改指向包装器。现场验证adapter_started、重复启动existing_healthy_adapter_reused、/api/route status可用，随后停止验证进程；业务TUN=false。79测试通过。正式前端脚本已改源码路径但未重启用户前端。
 
+- 最终运行态收口：已启动已安装的AgentProxyHub-Personal-TUN-Watchdog登录任务；当前个人desired_on=false，任务仅执行个人21919关闭态监护，不启动个人TUN；业务控制器tun=false，125固定端口探活全通。任务状态现场为Running；EVA8767未保持常驻（避免重复实例），业务mihomo未执行重启。79测试通过。任务可用uninstall-personal-watchdog-task.ps1回退。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
