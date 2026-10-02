@@ -26,6 +26,12 @@ class ControllerTest(unittest.TestCase):
             self.assertIsNone(c.status()['tun_enabled'])
             self.assertFalse(c.disable_tun()['ok'])
 
+    def test_snapshot_outside_backup_root_rejected(self):
+        c = self.controller()
+        with patch.object(c, 'request') as req:
+            self.assertEqual(c.reload_disabled_snapshot(r'D:\other\config.yaml')['code'], 'backup_path_required')
+            req.assert_not_called()
+
     def test_failed_verification_not_success(self):
         c = self.controller()
         with patch.object(c, 'request', side_effect=[{'tun': {'enable': True}}, {}, {'tun': {'enable': True}}]):

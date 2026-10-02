@@ -1,6 +1,7 @@
 """本机控制器撤销TUN与脱敏状态；不使用环境代理，不开启TUN。"""
 import json
 import urllib.request
+import urllib.error
 from pathlib import Path
 from core.personal_route import runtime_controller_auth
 
@@ -28,6 +29,32 @@ class TunController:
                     'mode': config.get('mode'), 'source': 'live_controller'}
         except Exception as exc:
             return {'ok': False, 'tun_enabled': None, 'error': type(exc).__name__}
+
+    def reload_disabled_snapshot(self, snapshot_path):
+        """控制器仍存活时加载已核对的关闭TUN快照；只接受私有回退目录。"""
+        import yaml
+        from core.personal_route import fixed_listener_map
+        path = Path(snapshot_path).resolve()
+        root = Path(r'D:\ProgramData\AgentProxyHub\backups').resolve()
+        if not path.is_relative_to(root):
+            return {'ok': False, 'code': 'backup_path_required'}
+        try:
+            snapshot = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
+            runtime = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding='utf-8-sig'))
+            if (snapshot.get('tun') or {}).get('enable', False):
+                return {'ok': False, 'code': 'snapshot_tun_must_be_disabled'}
+            if (fixed_listener_map(snapshot) != fixed_listener_map(runtime) or
+                    snapshot.get('listeners') != runtime.get('listeners')):
+                return {'ok': False, 'code': 'snapshot_business_mapping_mismatch'}
+            self.request('PUT', '/configs?force=true', {'path': str(path)})
+            after = self.status()
+            return {'ok': after.get('ok') and after.get('tun_enabled') is False,
+                    'action': 'reload_disabled_snapshot', 'business_kernel_stopped': False}
+        except urllib.error.HTTPError as exc:
+            return {'ok': False, 'code': 'snapshot_reload_denied' if exc.code == 400 else 'snapshot_reload_failed',
+                    'http_status': exc.code, 'error': type(exc).__name__}
+        except Exception as exc:
+            return {'ok': False, 'code': 'snapshot_reload_failed', 'error': type(exc).__name__}
 
     def disable_tun(self):
         """仅撤销个人TUN，不改125个listener，不停止业务内核。"""
