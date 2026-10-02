@@ -81,6 +81,9 @@ def main():
     if not result['persistent_before']['ok']:
         persistent.close()
         print(json.dumps(result)); return 2
+    from account_exit_baseline import bound_ports, probe_port
+    from concurrent.futures import ThreadPoolExecutor
+    account_ports, account_digest = bound_ports()
     existing_connections = connections(pid)
     result['existing_connections_before'] = len(existing_connections)
     try:
@@ -95,6 +98,8 @@ def main():
         result['persistent_during'] = persistent.request()
         result['socks_during'] = probe(True)
         result['system_during'] = probe()
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            result['account_exits_during'] = list(executor.map(probe_port, account_ports))
         result['existing_connections_retained_during'] = len(existing_connections & connections(pid))
         addresses = sorted({v for values in resolved.values() for v in values} | {a for a in active if not ipaddress.ip_address(a).is_loopback} | {'223.5.5.5'})
         routes = []
@@ -125,6 +130,8 @@ def main():
         result['existing_connections_before'] > 0 and
         result['existing_connections_retained_during'] == result['existing_connections_before'] and
         result['existing_connections_retained_after'] == result['existing_connections_before'])
+    _, account_after = bound_ports()
+    result['account_config_unchanged'] = account_digest == account_after
     result['gemini_noninterference_verified'] = False
     print(json.dumps(result, ensure_ascii=False))
     # 退出码仅代表这组有限双探针，不是Gemini/UDP或全量上线验收。
@@ -132,6 +139,8 @@ def main():
                  result.get('socks_during', {}).get('ok') and result['business_unchanged'] and
                  result['endpoint_routes_physical'] and result['stop'].get('ok') and
                  all(result.get('persistent_' + phase, {}).get('ok') for phase in ('before', 'during', 'after')) and
+                 all(row['ok'] for row in result.get('account_exits_during', [])) and
+                 result['account_config_unchanged'] and
                  result['personal_adapters_after'] == 0 and result['personal_routes_after'] == 0) else 2
 
 

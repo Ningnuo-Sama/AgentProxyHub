@@ -131,6 +131,8 @@
 
 - 持续连接实测：新增无重连PersistentProbe，经21012同一SOCKS+TLS socket在个人TUN开启前/期间/退出后均Google204、same_socket=true、服务器未要求关闭；收紧演练判据真实exit0。业务PID不变、上游WLAN、个人路由/网卡0；既有11条连接保持10条，不能断言其他连接为何结束。73回归通过，业务TUN=false。仅证明21012受控keep-alive，不等于所有账号/Gemini SSE/UDP验收。
 
+- 账号出口覆盖实测：现场账本为8个绑定端口（非历史7个）：21012/21022/22002/22010/22021/22023/22024/22038，TUN关闭基线与个人TUN开启期间全部完整TLS Google204；账号配置SHA256前后相同，未换绑。同21012持续socket开前/期间/退出后204、业务PID不变、上游WLAN、个人网卡/路由0，演练exit0。只验证出口，不含账号登录/模型生成/SSE；existing connections 24→23→16不判定自然结束原因。新增account_exit_baseline工具，不发付费请求。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
