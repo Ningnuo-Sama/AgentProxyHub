@@ -31,7 +31,7 @@ def read_log_source(name, limit=80):
     if not path or not path.exists(): return {'name': name, 'available': False, 'lines': []}
     try:
         lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
-        return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]} 
+        return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]}
     except OSError as exc:
         return {'name': name, 'available': False, 'error': type(exc).__name__, 'lines': []}
 
