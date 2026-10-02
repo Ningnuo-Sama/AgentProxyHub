@@ -37,7 +37,9 @@ def main():
         try:
             with urllib.request.urlopen(url, timeout=8) as r: result[name]={'ok':True,'status':r.status}
         except Exception as exc: result[name]={'ok':False,'error':type(exc).__name__}
-    result['conclusion'] = 'tun_verified' if state.get('tun_enabled') and adapter and routes and not result['fixed_ports']['failed'] else 'not_verified'
+    required = state.get('tun_enabled') is True and adapter and routes and not result['fixed_ports']['failed']
+    # 国内必须成功；海外成功是全量出海的必要验收项，不隐藏超时。
+    result['conclusion'] = 'tun_verified' if required and result['domestic'].get('ok') and result['overseas'].get('ok') else 'not_verified'
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if result['conclusion']=='tun_verified' else 2
 
