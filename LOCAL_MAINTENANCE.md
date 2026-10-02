@@ -123,6 +123,8 @@
 
 - 业务上游防回捕清单：新增business_route_exclusions，有界TUN关闭现场解析7个业务server，均成功，形成9个精确/32或/128个人路由排除及上游域名fake-ip过滤；缺失解析/fake-IP拒绝。72测试及独立mihomo -t通过。仅生成关闭候选，未修改业务节点/绑定、未开TUN；端点变化必须刷新，现有连接远端IP、DoH端点、实时物理选路仍需覆盖，不把排除清单等同运行防环证明。
 
+- 防回捕覆盖补充：现场业务既有公网连接43.207.231.45与DoH 120.53.53.53，Find-NetRoute均为WLAN index9、网卡Up，业务TUN=false；源码清单扩展业务DoH/DoT endpoint及active_addresses，DNS域名解析缺失仍拒绝，localhost过滤保留。73测试通过；未生成新部署配置/开启TUN，开启后的真实选路尚未验证。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
