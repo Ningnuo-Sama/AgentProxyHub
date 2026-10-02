@@ -147,6 +147,8 @@
 
 - 正式个人生命周期闭环实测：源码personal_lifecycle.start启动已安装TUN=true候选，4秒后控制器21919报告tun_enabled=true/process_running=true/desired_on=true；系统Google204与显式21012 Google204均成功；stop只停个人并返回出海介入，随后个人控制器不可达、进程不存在、desired_on=false；业务控制器始终tun=false、业务PID未重启、125固定端口全通。79测试通过。已恢复个人关闭状态。仍未部署常驻看门狗/EVA正式适配层，未做Gemini/SSE/UDP全量验收。
 
+- 个人看门狗常驻入口：新增run-personal-watchdog.ps1/.bat及安装/卸载Scheduled Task脚本，任务名AgentProxyHub-Personal-TUN-Watchdog，AtLogOn、仅--personal --interval 5，不自动启动个人TUN。已实际Register并Start验证，任务启动个人runner且业务TUN=false；随后Stop任务，当前任务已安装但未运行（Ready）。runner直接受限测试超时是预期常驻行为，不是功能失败；卸载脚本可回退。79测试通过。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
