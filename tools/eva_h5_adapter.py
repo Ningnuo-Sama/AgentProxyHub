@@ -6,8 +6,9 @@ from urllib.parse import urlparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault('APHUB_DATA_DIR', r'D:\Program Files\AgentProxyHub\data')
-from mcp.server import tool_jingguanjia_orphan, tool_get_profile_bindings
+from mcp.server import tool_jingguanjia_orphan, tool_get_profile_bindings, tool_autonomy_action, tool_channel_health
 from core.model_router import complete, status as model_status
+from core.alert_dispatch import notify_all
 
 UPSTREAMS = {
     'flow': 'http://127.0.0.1:8001/health',
@@ -30,7 +31,9 @@ class Handler(BaseHTTPRequestHandler):
         raw = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', 'http://127.0.0.1:43121')
+        origin = self.headers.get('Origin', '')
+        allowed_origin = origin if origin in {'http://127.0.0.1:8768', 'http://localhost:8768', 'http://127.0.0.1:43121'} else 'http://127.0.0.1:8768'
+        self.send_header('Access-Control-Allow-Origin', allowed_origin)
         self.send_header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers(); self.wfile.write(raw)
@@ -43,6 +46,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/bindings': return self.send_json(200, {'ok': True, 'result': tool_get_profile_bindings({})})
         if path == '/api/audit': return self.send_json(200, {'ok': True, 'result': tool_jingguanjia_orphan({'action':'audit_log','limit':30})})
         if path == '/api/models': return self.send_json(200, model_status())
+        if path == '/api/health': return self.send_json(200, tool_channel_health({}))
+        if path == '/api/autonomy': return self.send_json(200, tool_autonomy_action({'action':'status'}))
+        if path == '/api/topology':
+            health = tool_channel_health({})
+            autonomy = tool_autonomy_action({'action':'status'})
+            return self.send_json(200, {'ok': True, 'nodes': [
+                {'id':'aph','label':'AgentProxyHub','kind':'core','status':'online'},
+                {'id':'mihomo','label':'mihomo 固定端口池','kind':'proxy','status':'online'},
+                {'id':'gemini','label':'Antigravity / Gemini','kind':'model','status':health.get('channels',{}).get('gemini_antigravity',{}).get('status','unknown')},
+                {'id':'flow','label':'Flow-Tools','kind':'media','status':health.get('channels',{}).get('flow_tools',{}).get('status','unknown')},
+                {'id':'pet','label':'鲸管家','kind':'notify','status':health.get('channels',{}).get('jingguanjia',{}).get('status','unknown')},
+                {'id':'hermes','label':'Hermes / 微信','kind':'notify','status':'configured'},
+                {'id':'viking','label':'OpenViking','kind':'memory','status':health.get('channels',{}).get('openviking_gateway',{}).get('status','unknown')},
+            ], 'edges': [['aph','mihomo'],['aph','gemini'],['aph','flow'],['aph','pet'],['aph','hermes'],['aph','viking']], 'autonomy': autonomy})
         return self.send_json(404, {'ok': False, 'code': 'not_found'})
     def do_POST(self):
         path = urlparse(self.path).path
@@ -57,6 +74,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {'ok': True, 'status':'awaiting_final_user_confirmation', 'submitted':False})
         if path == '/api/wechat/prepare':
             return self.send_json(200, {'ok': True, 'target':'一帆', 'status':'prepared', 'sent':False})
+        if path == '/api/notify':
+            text = str(body.get('text') or '').strip()
+            if not text or len(text) > 2000: return self.send_json(400, {'ok': False, 'code':'invalid_text'})
+            return self.send_json(200, {'ok': True, 'delivery': notify_all(text, event_id=body.get('event_id'))})
+        if path == '/api/autonomy/run_once':
+            return self.send_json(200, tool_autonomy_action({'action':'run_once', 'notify': bool(body.get('notify', True))}))
         if path == '/api/complete':
             prompt = str(body.get('prompt') or '')
             urgency = str(body.get('urgency') or 'daily')
