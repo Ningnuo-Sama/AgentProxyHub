@@ -34,6 +34,7 @@ LOG_SOURCES = {
     'antigravity_app': Path(r'C:\Users\1\.antigravity_tools\logs\app.log.2026-10-02'),
 }
 ANTIGRAVITY_DB = Path(r'C:\Users\1\.antigravity_tools\proxy_logs.db')
+FLOW_TASK_LOG = Path(r'C:\Users\1\AppData\Local\FlowTools\task-logs.json')
 
 def read_log_source(name, limit=80):
     path = LOG_SOURCES.get(name)
@@ -43,6 +44,19 @@ def read_log_source(name, limit=80):
         return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]}
     except OSError as exc:
         return {'name': name, 'available': False, 'error': type(exc).__name__, 'lines': []}
+
+def read_flow_task_logs(limit=100):
+    if not FLOW_TASK_LOG.exists(): return {'name': 'flow_tasks', 'available': False, 'lines': []}
+    try:
+        data = json.loads(FLOW_TASK_LOG.read_text(encoding='utf-8-sig'))
+        if not isinstance(data, list): return {'name': 'flow_tasks', 'available': False, 'lines': []}
+        lines = []
+        for item in data[:max(1, min(int(limit), 200))]:
+            lines.append(f"{item.get('createdAt','-')} | {item.get('email','-')} | {item.get('operation','-')} | {item.get('model','-')} | {item.get('status','-')} | {item.get('durationMs',0)}ms | via {item.get('via','-')}")
+        return {'name': 'flow_tasks', 'available': True, 'path': str(FLOW_TASK_LOG), 'lines': list(reversed(lines))}
+    except (OSError, ValueError, TypeError):
+        return {'name': 'flow_tasks', 'available': False, 'lines': []}
+
 
 def read_antigravity_request_logs(limit=100):
     if not ANTIGRAVITY_DB.exists(): return {'name': 'antigravity_requests', 'available': False, 'lines': []}
@@ -221,8 +235,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/autonomy': return self.send_json(200, tool_autonomy_action({'action':'status'}))
         if path == '/api/logs':
             query = parse_qs(urlparse(self.path).query)
-            names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or [*LOG_SOURCES, 'antigravity_requests']
-            sources = [read_antigravity_request_logs(100) if name == 'antigravity_requests' else read_log_source(name, 100) for name in names]
+            names = [x.strip() for x in (query.get('sources') or query.get('source') or [''])[0].split(',') if x.strip()] or [*LOG_SOURCES, 'flow_tasks', 'antigravity_requests']
+            sources = [read_flow_task_logs(100) if name == 'flow_tasks' else (read_antigravity_request_logs(100) if name == 'antigravity_requests' else read_log_source(name, 100)) for name in names]
             return self.send_json(200, {'ok': True, 'sources': sources})
         if path == '/api/usage':
             from core.model_usage import usage_summary
