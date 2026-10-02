@@ -44,7 +44,7 @@ def clean_log_line(source, line):
         if len(parts) >= 7:
             _, account, operation, model, status, duration, via = parts[:7]
             action = {'image_generation': '生成图片', 'image_generation_chat': '生成图片', 'image_edit': '编辑图片', 'video_generation_chat': '生成视频', 'video_generation': '生成视频'}.get(operation, operation)
-            return f'{account} {action} · {model} · {"成功" if status == "success" else "失败"} · {duration} · {via}'
+            return f'{account} {action} · {model} · {"成功" if status == "success" else "失败"} · {duration}'
     if source == 'antigravity_requests':
         parts = [p.strip() for p in text.split('|')]
         if len(parts) >= 6:
