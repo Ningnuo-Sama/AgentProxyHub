@@ -167,6 +167,8 @@
 
 - UDP失败归因对照：同机直连223.5.5.5:53的标准DNS UDP请求成功收到31字节响应，固定SOCKS UDP ASSOCIATE虽成功但经21012转发同请求6秒超时；故当前失败定位为BUSINESS-SOCKS/业务节点UDP转发或协议封装未验收，不是本机公网DNS整体不可达。个人desired_on=false、业务tun=false，未再启动个人。
 
+- EVA额度口径统一（不改UI结构）：以后端账号源quota_groups为唯一来源，新增/api/quota-summary并映射现有额度卡：Gemini/Claude均显示5H与weekly加权均值，生图显示gemini-3.1-flash-image账号模型均值；截图实测页面读取Gemini 55.1%（5H94.2%/7D55.1%）、Claude77.7%（5H100%/7D77.7%）、Gemini生图55.2%。原始账号字段仍可由/api/quota读取，未混用模型percentage冒充5H/周。80测试、py_compile和页面运行态验证通过。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

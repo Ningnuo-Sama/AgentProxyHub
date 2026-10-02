@@ -60,13 +60,43 @@ def read_antigravity_quota():
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
             models = data.get('quota', {}).get('models', [])
-            rows.append({'id': data.get('id'), 'email': data.get('email'), 'models': [
+            rows.append({'id': data.get('id'), 'email': data.get('email'), 'quota_groups': data.get('quota', {}).get('quota_groups', []), 'models': [
                 {'name': m.get('name'), 'display_name': m.get('display_name'), 'percentage': m.get('percentage'), 'reset_time': m.get('reset_time')}
                 for m in models if isinstance(m, dict)
             ]})
         except (OSError, ValueError, TypeError):
             continue
     return {'ok': True, 'source': str(root), 'accounts': rows, 'account_count': len(rows), 'secrets_excluded': True}
+
+def read_quota_summary():
+    """给EVA现有三张额度卡提供同一份账号源快照，不改变UI结构。"""
+    raw = read_antigravity_quota()
+    accounts = [a for a in raw.get('accounts', []) if a.get('email')]
+    groups = {'gemini': 'Gemini Models', 'claude': 'Claude and GPT models'}
+    result = {'ok': raw.get('ok', False), 'source': raw.get('source'), 'account_count': len(accounts), 'models': {}}
+    for key, display in groups.items():
+        values = {'5h': [], 'weekly': []}
+        for account in accounts:
+            data = account.get('quota_groups') or []
+            for group in data:
+                if group.get('display_name') != display:
+                    continue
+                for bucket in group.get('buckets', []):
+                    fraction = bucket.get('remaining_fraction')
+                    if isinstance(fraction, (int, float)):
+                        window = bucket.get('window')
+                        if window == '5h': values['5h'].append(float(fraction) * 100)
+                        elif window == 'weekly': values['weekly'].append(float(fraction) * 100)
+        result['models'][key] = {window: round(sum(items) / len(items), 1) if items else None for window, items in values.items()}
+    image_values = []
+    for account in accounts:
+        for model in account.get('models', []):
+            if model.get('name') == 'gemini-3.1-flash-image' and isinstance(model.get('percentage'), (int, float)):
+                image_values.append(float(model['percentage']))
+    result['models']['gemini_image'] = {'available': round(sum(image_values) / len(image_values), 1) if image_values else None}
+    result['generated_at'] = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+    return result
+
 
 def mihomo_get(path, timeout=6):
     request = urllib.request.Request(MIHOMO_CONTROLLER + path, headers=MIHOMO_HEADERS)
@@ -179,6 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             from core.model_usage import usage_summary
             return self.send_json(200, usage_summary())
         if path == '/api/quota': return self.send_json(200, read_antigravity_quota())
+        if path == '/api/quota-summary': return self.send_json(200, read_quota_summary())
         if path == '/api/driver-cards': return self.send_json(200, read_driver_cards())
         if path == '/api/topology':
             health = tool_channel_health({})
