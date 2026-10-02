@@ -2,12 +2,13 @@
 # EVA H5 本地适配层：只在 loopback 提供脱敏状态和已登记任务，不暴露凭据。
 import json, os, sys, urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault('APHUB_DATA_DIR', r'D:\Program Files\AgentProxyHub\data')
-from mcp.server import tool_jingguanjia_orphan, tool_get_profile_bindings, tool_autonomy_action, tool_channel_health
+from mcp.server import tool_jingguanjia_orphan, tool_get_profile_bindings, tool_autonomy_action, tool_channel_health, tool_kernel_recovery
 from core.model_router import complete, status as model_status
 from core.alert_dispatch import notify_all
 
@@ -34,6 +35,22 @@ def read_log_source(name, limit=80):
         return {'name': name, 'available': True, 'path': str(path), 'lines': lines[-max(1, min(int(limit), 200)):]}
     except OSError as exc:
         return {'name': name, 'available': False, 'error': type(exc).__name__, 'lines': []}
+
+def read_antigravity_quota():
+    root = Path(r'C:\Users\1\.antigravity_tools\accounts')
+    rows = []
+    if not root.exists(): return {'ok': False, 'code': 'quota_source_missing', 'accounts': []}
+    for path in root.glob('*.json'):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            models = data.get('quota', {}).get('models', [])
+            rows.append({'id': data.get('id'), 'email': data.get('email'), 'models': [
+                {'name': m.get('name'), 'display_name': m.get('display_name'), 'percentage': m.get('percentage'), 'reset_time': m.get('reset_time')}
+                for m in models if isinstance(m, dict)
+            ]})
+        except (OSError, ValueError, TypeError):
+            continue
+    return {'ok': True, 'source': str(root), 'accounts': rows, 'account_count': len(rows), 'secrets_excluded': True}
 
 def probe(url):
     try:
@@ -71,6 +88,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/usage':
             from core.model_usage import usage_summary
             return self.send_json(200, usage_summary())
+        if path == '/api/quota': return self.send_json(200, read_antigravity_quota())
         if path == '/api/topology':
             health = tool_channel_health({})
             autonomy = tool_autonomy_action({'action':'status'})
@@ -103,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {'ok': True, 'delivery': notify_all(text, event_id=body.get('event_id'))})
         if path == '/api/autonomy/run_once':
             return self.send_json(200, tool_autonomy_action({'action':'run_once', 'notify': bool(body.get('notify', True))}))
+        if path == '/api/recovery':
+            return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
         if path == '/api/complete':
             prompt = str(body.get('prompt') or '')
             urgency = str(body.get('urgency') or 'daily')
