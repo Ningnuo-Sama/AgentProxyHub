@@ -52,6 +52,7 @@ def run_test():
         assert "list_scenes" in tools
         assert "list_matched_proxies" in tools
         assert "bind_profile_proxy" in tools
+        assert "mineru_ocr" in tools
 
         # 3. tools/call: list_scenes
         print("[TEST 3/5] Testing tool call: list_scenes...")

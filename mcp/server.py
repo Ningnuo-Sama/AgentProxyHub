@@ -735,6 +735,12 @@ def tool_refresh_upstream_nodes(args: Dict[str, Any]) -> Dict[str, Any]:
             os.environ["APHUB_UPSTREAM_SOCKS5"] = old_proxy
 
 
+def tool_mineru_ocr(args: Dict[str, Any]) -> Dict[str, Any]:
+    """薄包装：安全契约、凭据和分阶段上传由独立模块负责。"""
+    from core.mineru_ocr import run
+    return run(args)
+
+
 def tool_get_upstream_sources(args: Dict[str, Any]) -> Dict[str, Any]:
     """读取已登记的所有上游机场与订阅源清单及状态。"""
     include_secret = bool(args.get("include_secret", False))
@@ -944,7 +950,11 @@ def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
 def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     """Detect/recover the known local mihomo runner; no rebinding or paid calls."""
     from core.resident_engineer import ResidentEngineer
-    runner = args.get("runner") or r"D:\Program Files\AgentProxyHub\silent-run.bat"
+    # 默认指向与源码仓库同级部署的正式运行副本；找不到时回退源码仓库自身 runner。
+    default_runner = ROOT_DIR.parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"
+    if not default_runner.exists():
+        default_runner = ROOT_DIR / "silent-run.bat"
+    runner = args.get("runner") or str(default_runner)
     result = ResidentEngineer().dispatch("recover_mihomo", {"runner": runner, "wait_seconds": args.get("wait_seconds", 12), "ports": args.get("ports")})
     if result.get("ok") and not result.get("result", {}).get("ok", False):
         result["ok"] = False
@@ -1101,6 +1111,17 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "mineru_ocr",
+        "description": "MinerU官方OCR；默认dry_run，submit成功上传后返回job_id，status单次查询并将结果落盘；精准模式内部读DPAPI金库，Agent模式无token；不返回签名URL或凭据，费用/置信度unknown",
+        "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
+            "file_path": {"type": "string", "description": "dry_run/submit：固定隔离目录内的图片或文档"},
+            "action": {"type": "string", "enum": ["dry_run", "submit", "status"], "default": "dry_run"},
+            "api": {"type": "string", "enum": ["precise", "agent"], "default": "precise", "description": "仅dry_run/submit；status从本地任务账本恢复"},
+            "job_id": {"type": "string", "description": "status：submit返回的本地任务ID"}
+        }},
+        "handler": tool_mineru_ocr
+    },
     {
         "name": "vault_status",
         "description": "读取长期凭据金库的脱敏库存统计，不返回任何凭据值",

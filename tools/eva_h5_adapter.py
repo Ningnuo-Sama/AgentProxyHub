@@ -101,12 +101,44 @@ def read_antigravity_request_logs(limit=100):
 def read_driver_cards():
     bindings = tool_get_profile_bindings({})
     quota = {a.get('email'): a for a in read_antigravity_quota().get('accounts', [])}
+    usage_stats = {}
+    try:
+        db_path = Path(r'C:\Users\1\.antigravity_tools\proxy_logs.db')
+        if db_path.exists():
+            import sqlite3
+            con = sqlite3.connect(str(db_path), timeout=2)
+            cur = con.cursor()
+            cur.execute("SELECT account_email, count(*) FROM request_logs WHERE model = 'gemini-3.1-flash-image' GROUP BY account_email")
+            img_map = dict(cur.fetchall())
+            cur.execute("SELECT account_email, count(*) FROM request_logs GROUP BY account_email")
+            tot_map = dict(cur.fetchall())
+            con.close()
+            for em in set(list(img_map.keys()) + list(tot_map.keys())):
+                if em:
+                    usage_stats[em] = {'image_calls': img_map.get(em, 0), 'total_calls': tot_map.get(em, 0)}
+    except Exception:
+        pass
+
     cards = []
     for item in bindings.get('antigravity_account_stickiness', []):
         email = item.get('account')
         account_data = quota.get(email) or {}
         models = account_data.get('models') or []
-        cards.append({'account': email, 'port': item.get('port'), 'node_name': item.get('node_name'), 'proxy_id': item.get('proxy_id'), 'models': models, 'quota_groups': (quota.get(email) or {}).get('quota_groups', (quota.get(email) or {}).get('_quota_groups', [])), 'mapping_source': 'antigravity_account_stickiness + local quota'})
+        st = usage_stats.get(email, {'image_calls': 0, 'total_calls': 0})
+        img_calls = st.get('image_calls', 0)
+        img_remain = max(0, 50 - img_calls)
+        img_pct = round(img_remain / 50 * 100)
+        cards.append({
+            'account': email,
+            'port': item.get('port'),
+            'node_name': item.get('node_name'),
+            'proxy_id': item.get('proxy_id'),
+            'models': models,
+            'quota_groups': (quota.get(email) or {}).get('quota_groups', (quota.get(email) or {}).get('_quota_groups', [])),
+            'image_quota': {'remaining': img_remain, 'total': 50, 'percentage': img_pct, 'calls': img_calls},
+            'usage_stats': st,
+            'mapping_source': 'antigravity_account_stickiness + local quota'
+        })
     return {'ok': True, 'cards': cards, 'count': len(cards), 'secrets_excluded': True}
 
 def read_antigravity_quota():
@@ -331,7 +363,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/route':
             # 个人出海只操作独立内核；保留既有文案语义，不触碰125个业务监听。
             action = str(body.get('action') or body.get('state') or '').lower()
-            from core.personal_lifecycle import start, stop, status
+            from core.personal_lifecycle import start, stop, status, toggle
+            if action == 'toggle':
+                return self.send_json(200, toggle())
             if action in {'start', 'on', 'enable', '出海展開中'}:
                 return self.send_json(200, start())
             if action in {'stop', 'off', 'disable', '出海介入'}:

@@ -20,11 +20,40 @@ def _running():
     return bool(result.stdout.strip() and result.stdout.strip() not in ('null', '[]'))
 
 
-def status():
-    from .tun_controller import TunController
-    state = TunController(PERSONAL_CONFIG).status()
-    return {'controller': state, 'desired_on': _desired(), 'personal_executable': PERSONAL_EXE,
-            'process_running': _running()}
+_STATUS_CACHE = None
+_STATUS_AT = 0.0
+
+
+def status(force=False):
+    """短缓存共享控制器读数；不为网页轮询启动PowerShell。"""
+    global _STATUS_CACHE, _STATUS_AT
+    with control_lock():
+        if not force and _STATUS_CACHE is not None and time.monotonic() - _STATUS_AT < 5:
+            return dict(_STATUS_CACHE)
+        from .tun_controller import TunController
+        state = TunController(PERSONAL_CONFIG).status()
+        active = state.get('tun_enabled') if state.get('ok') else None
+        # 控制器不可达时才查进程；不把失联但仍运行的内核当成关闭。
+        running = True if state.get('ok') else _running()
+        if not running:
+            active = False
+        _STATUS_CACHE = {'controller': state, 'desired_on': _desired(),
+                         'personal_executable': PERSONAL_EXE, 'process_running': running,
+                         'active': active, 'known': active is not None}
+        _STATUS_AT = time.monotonic()
+        return dict(_STATUS_CACHE)
+
+
+def toggle():
+    """在同一可重入跨进程锁内决定方向、执行、确认。"""
+    with control_lock():
+        before = status(force=True)
+        if not before['known']:
+            return {'ok': False, 'code': 'personal_route_state_unknown', 'state': before}
+        result = stop() if before['active'] else start()
+        after = status(force=True)
+        return {**result, 'ok': bool(result.get('ok') and after['known'] and after['active'] != before['active']),
+                'state': after}
 
 
 def _desired():

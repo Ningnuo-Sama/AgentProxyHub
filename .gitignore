@@ -37,3 +37,6 @@ docs/UPSTREAM_AIRPORT_TOKEN_RECON_REPORT_*.md
 # 运行期敏感数据
 bridge.json
 config/bridge.json
+
+config/*_profile.yaml
+data/refresh-*.ps1
