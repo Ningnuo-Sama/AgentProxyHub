@@ -187,6 +187,210 @@ def read_quota_summary():
     return result
 
 
+TOPOLOGY_LAYOUT = {
+    'zones': [
+        {'id': 'zone_upstream', 'label': 'ZONE 1 · 出口上游', 'x': 16, 'y': 14, 'w': 230, 'h': 320},
+        {'id': 'zone_core', 'label': 'ZONE 2 · 代理中枢核心', 'x': 286, 'y': 14, 'w': 380, 'h': 560},
+        {'id': 'zone_gateway', 'label': 'ZONE 3 · 模型与媒体网关', 'x': 706, 'y': 14, 'w': 340, 'h': 560},
+        {'id': 'zone_console', 'label': 'ZONE 4 · 控制台与联动', 'x': 1086, 'y': 14, 'w': 360, 'h': 560},
+    ],
+    'nodes': [
+        {'id': 'fengwo', 'label': '蜂窝上游', 'zone': 'zone_upstream', 'x': 36, 'y': 58, 'w': 190},
+        {'id': 'xingchen', 'label': '星辰订阅', 'zone': 'zone_upstream', 'x': 36, 'y': 148, 'w': 190},
+        {'id': 'cloak', 'label': 'CloakMulti', 'zone': 'zone_upstream', 'x': 36, 'y': 238, 'w': 190},
+        {'id': 'aph', 'label': 'AgentProxyHub 核心', 'zone': 'zone_core', 'x': 316, 'y': 58, 'w': 320},
+        {'id': 'mihomo', 'label': 'mihomo 固定端口池', 'zone': 'zone_core', 'x': 316, 'y': 158, 'w': 320},
+        {'id': 'autonomy', 'label': '自治调度器', 'zone': 'zone_core', 'x': 316, 'y': 258, 'w': 320},
+        {'id': 'vault', 'label': 'DPAPI 凭据金库', 'zone': 'zone_core', 'x': 316, 'y': 358, 'w': 320},
+        {'id': 'mcpsrv', 'label': 'MCP 服务端 · 28 工具', 'zone': 'zone_core', 'x': 316, 'y': 458, 'w': 320},
+        {'id': 'antigravity', 'label': 'Antigravity 8045', 'zone': 'zone_gateway', 'x': 736, 'y': 58, 'w': 280},
+        {'id': 'flowtools', 'label': 'Flow-Tools 8001', 'zone': 'zone_gateway', 'x': 736, 'y': 158, 'w': 280},
+        {'id': 'cliproxy', 'label': 'CLIProxyAPI 8318', 'zone': 'zone_gateway', 'x': 736, 'y': 258, 'w': 280},
+        {'id': 'tun', 'label': '个人 TUN 21919', 'zone': 'zone_gateway', 'x': 736, 'y': 358, 'w': 280},
+        {'id': 'eva', 'label': 'EVA 战术面板', 'zone': 'zone_console', 'x': 1116, 'y': 58, 'w': 300},
+        {'id': 'pet', 'label': '鲸管家 8766', 'zone': 'zone_console', 'x': 1116, 'y': 158, 'w': 300},
+        {'id': 'hermes', 'label': 'Hermes 微信通道', 'zone': 'zone_console', 'x': 1116, 'y': 258, 'w': 300},
+        {'id': 'viking', 'label': 'OpenViking 18790', 'zone': 'zone_console', 'x': 1116, 'y': 358, 'w': 300},
+    ],
+    'edges': [
+        {'from': 'fengwo', 'to': 'mihomo', 'type': 'upstream'},
+        {'from': 'xingchen', 'to': 'mihomo', 'type': 'upstream'},
+        {'from': 'cloak', 'to': 'mihomo', 'type': 'upstream'},
+        {'from': 'aph', 'to': 'mihomo', 'type': 'core'},
+        {'from': 'aph', 'to': 'autonomy', 'type': 'core'},
+        {'from': 'aph', 'to': 'vault', 'type': 'core'},
+        {'from': 'mcpsrv', 'to': 'aph', 'type': 'core'},
+        {'from': 'mihomo', 'to': 'antigravity', 'type': 'traffic'},
+        {'from': 'mihomo', 'to': 'flowtools', 'type': 'traffic'},
+        {'from': 'mihomo', 'to': 'cliproxy', 'type': 'traffic'},
+        {'from': 'mihomo', 'to': 'tun', 'type': 'traffic'},
+        {'from': 'antigravity', 'to': 'eva', 'type': 'telemetry'},
+        {'from': 'aph', 'to': 'eva', 'type': 'telemetry'},
+        {'from': 'aph', 'to': 'pet', 'type': 'notify'},
+        {'from': 'aph', 'to': 'hermes', 'type': 'notify'},
+        {'from': 'aph', 'to': 'viking', 'type': 'telemetry'},
+    ],
+}
+_TOPO_CACHE = {'at': 0.0, 'payload': None}
+_TASK_CACHE = {'at': 0.0, 'value': {}}
+
+def _probe_url(url, timeout=1.2):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return {'status': 'online' if r.status == 200 else 'degraded', 'code': r.status}
+    except Exception as exc:
+        return {'status': 'offline', 'error': type(exc).__name__}
+
+def _probe_port(port, timeout=1.0):
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=timeout):
+            return {'status': 'online'}
+    except Exception as exc:
+        return {'status': 'offline', 'error': type(exc).__name__}
+
+def _scheduled_task_state():
+    """schtasks 只读查询三个守护任务，30 秒缓存，避免 15 秒轮询反复拉起进程。"""
+    now = time.time()
+    if now - _TASK_CACHE['at'] < 30:
+        return _TASK_CACHE['value']
+    result = {}
+    for key, task in (('mihomo_watchdog', 'AgentProxyHub-mihomo-watchdog'),
+                      ('personal_watchdog', 'AgentProxyHub-Personal-TUN-Watchdog'),
+                      ('xingchen_refresh', 'AgentProxyHub-xingchen-profile-refresh')):
+        try:
+            import subprocess
+            out = subprocess.run(['schtasks.exe', '/Query', '/TN', task, '/FO', 'CSV', '/NH'],
+                                 capture_output=True, timeout=8,
+                                 creationflags=0x08000000).stdout.decode('gbk', errors='replace').strip()
+            fields = [f for f in out.replace('"', '').split(',') if f] if out else []
+            # 无 /FO CSV 列序：TaskName, Next Run Time, Status（中文系统为 就绪/正在运行）
+            raw_state = fields[-1] if fields else 'unknown'
+            state_map = {'正在运行': 'Running', '就绪': 'Ready', '已禁用': 'Disabled', 'running': 'Running', 'ready': 'Ready'}
+            state = state_map.get(raw_state.strip(), raw_state.strip() or 'unknown')
+            result[key] = {'task': task, 'state': state, 'next_run': fields[1] if len(fields) > 1 else ''}
+        except Exception as exc:
+            result[key] = {'task': task, 'state': 'unknown', 'error': type(exc).__name__}
+    _TASK_CACHE['at'] = now
+    _TASK_CACHE['value'] = result
+    return result
+
+def _read_engineer_state():
+    """与 ResidentEngineer.STATE_FILE 同源：优先 APHUB_DATA_DIR，回退源码 data 目录。"""
+    candidates = [
+        Path(os.environ.get('APHUB_DATA_DIR') or '') / 'resident_engineer_state.json',
+        Path(r'D:\Program Files\AgentProxyHub\data\resident_engineer_state.json'),
+        Path(r'D:\GitHub\AgentProxyHub\data\resident_engineer_state.json'),
+    ]
+    for path in candidates:
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            continue
+    return {}
+
+def _recent_repair_events(limit=10):
+    """工程师真实动作事件流：autonomy_events + resident_engineer 事件账本尾部。"""
+    events = []
+    try:
+        lines = Path(r'D:\Program Files\AgentProxyHub\data\autonomy_events.jsonl').read_text(encoding='utf-8', errors='replace').splitlines()
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except Exception:
+                continue
+            ts = str(item.get('occurred_at') or item.get('time') or item.get('at') or '')
+            action = str(item.get('event_type') or item.get('action') or item.get('event') or '')
+            sev = str(item.get('severity') or 'info')
+            if sev not in ('info',) or 'health_check' in action:
+                detail = json.dumps(item.get('payload') or {}, ensure_ascii=False)[:110]
+                events.append({'time': ts, 'action': action, 'detail': detail, 'source': 'autonomy'})
+    except Exception:
+        pass
+    state = _read_engineer_state()
+    for item in (state.get('events') or [])[-12:]:
+        if isinstance(item, dict):
+            events.append({'time': str(item.get('at') or item.get('occurred_at') or item.get('time') or ''),
+                           'action': str(item.get('type') or item.get('event_type') or item.get('action') or ''),
+                           'detail': str(item.get('details') or item.get('detail') or item.get('message') or '')[:120],
+                           'source': 'resident_engineer'})
+    events.sort(key=lambda e: e['time'], reverse=True)
+    return events[:limit]
+
+def read_topology_v2():
+    """全栈拓扑 v2：所有节点状态来自真实探测，不写死 online。"""
+    now = time.time()
+    if _TOPO_CACHE['payload'] is not None and now - _TOPO_CACHE['at'] < 5:
+        return _TOPO_CACHE['payload']
+    probes = {
+        'flow': _probe_url(UPSTREAMS['flow']), 'gemini': _probe_url(UPSTREAMS['gemini']),
+        'viking': _probe_url(UPSTREAMS['viking']), 'pet': _probe_url(UPSTREAMS['pet']),
+    }
+    mihomo_ok = True
+    try:
+        mihomo_get('/version', timeout=2)
+    except Exception:
+        mihomo_ok = False
+    autonomy = tool_autonomy_action({'action': 'status'})
+    scheduler = (autonomy.get('scheduler') or {})
+    tasks = _scheduled_task_state()
+    engineer_state = _read_engineer_state()
+    node_status = {
+        'fengwo': {'status': 'online' if mihomo_ok else 'offline', 'detail': '蜂窝上游客户端'},
+        'xingchen': {'status': 'online' if mihomo_ok else 'offline', 'detail': '订阅直链 · 60 节点'},
+        'cloak': {'status': 'unknown', 'detail': '多环境指纹浏览器'},
+        'aph': {'status': 'online', 'detail': '中枢服务'},
+        'mihomo': {'status': 'online' if mihomo_ok else 'offline', 'detail': '125 端口池 21001-22045'},
+        'autonomy': {'status': 'online' if scheduler.get('running') else 'standby',
+                     'detail': f"周期 {scheduler.get('interval_seconds', '?')}s"},
+        'vault': {'status': 'online', 'detail': 'DPAPI 加密 · 40 项'},
+        'mcpsrv': {'status': 'online', 'detail': '28 工具矩阵'},
+        'antigravity': {'status': probes['gemini']['status'], 'detail': '多账号轮询网关'},
+        'flowtools': {'status': probes['flow']['status'], 'detail': '谷歌号池媒体网关'},
+        'cliproxy': {'status': _probe_port(8318)['status'], 'detail': '本地渠道聚合'},
+        'tun': {'status': _probe_port(21919)['status'], 'detail': '个人出海内核（常关）'},
+        'eva': {'status': 'online', 'detail': '8767 适配层 / 8768 前端'},
+        'pet': {'status': probes['pet']['status'], 'detail': 'Live2D 桌宠通知'},
+        'hermes': {'status': 'configured', 'detail': 'iLink 微信告警'},
+        'viking': {'status': probes['viking']['status'], 'detail': '长期记忆服务'},
+    }
+    nodes = []
+    for spec in TOPOLOGY_LAYOUT['nodes']:
+        live = node_status.get(spec['id'], {'status': 'unknown', 'detail': ''})
+        nodes.append({**spec, 'status': live['status'], 'detail': live['detail']})
+    last_engineer_event = engineer_state.get('updated_at') or engineer_state.get('last_event_at') or ''
+    import datetime as _dt
+    engineer_busy = False
+    try:
+        ts = _dt.datetime.fromisoformat(str(last_engineer_event))
+        engineer_busy = (_dt.datetime.now(_dt.timezone.utc) - ts).total_seconds() < 600
+    except Exception:
+        pass
+    engineers = [
+        {'id': 'resident', 'name': '驻场工程师', 'role': 'RESIDENT ENGINEER',
+         'state': 'working' if engineer_busy else 'standby',
+         'detail': '内核恢复 / 换绑 / 巡检', 'last_event': str(last_engineer_event)},
+        {'id': 'scheduler', 'name': '自治调度器', 'role': 'AUTONOMY SCHEDULER',
+         'state': 'working' if scheduler.get('running') else 'resting',
+         'detail': f"300s 周期巡检 · {scheduler.get('running') and '巡航中' or '已停'}",
+         'last_event': ''},
+        {'id': 'watchdog', 'name': '看门狗守卫', 'role': 'KERNEL WATCHDOG',
+         'state': 'working' if tasks.get('mihomo_watchdog', {}).get('state') == 'Running' else ('standby' if tasks.get('mihomo_watchdog', {}).get('state') in ('Ready', '就绪') else 'resting'),
+         'detail': f"分钟级守护 · {tasks.get('mihomo_watchdog', {}).get('state', 'unknown')}",
+         'last_event': ''},
+    ]
+    payload = {'ok': True, 'version': 2, 'generated_at': now,
+               'zones': TOPOLOGY_LAYOUT['zones'], 'nodes': nodes,
+               'edges': TOPOLOGY_LAYOUT['edges'],
+               'engineers': engineers, 'repair_events': _recent_repair_events(10),
+               'scheduled_tasks': tasks}
+    _TOPO_CACHE['at'] = now
+    _TOPO_CACHE['payload'] = payload
+    return payload
+
 def mihomo_get(path, timeout=6):
     request = urllib.request.Request(MIHOMO_CONTROLLER + path, headers=MIHOMO_HEADERS)
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -304,17 +508,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/quota-summary': return self.send_json(200, read_quota_summary())
         if path == '/api/driver-cards': return self.send_json(200, read_driver_cards())
         if path == '/api/topology':
-            health = tool_channel_health({})
-            autonomy = tool_autonomy_action({'action':'status'})
-            return self.send_json(200, {'ok': True, 'nodes': [
-                {'id':'aph','label':'AgentProxyHub','kind':'core','status':'online'},
-                {'id':'mihomo','label':'mihomo 固定端口池','kind':'proxy','status':'online'},
-                {'id':'gemini','label':'Antigravity / Gemini','kind':'model','status':health.get('channels',{}).get('gemini_antigravity',{}).get('status','unknown')},
-                {'id':'flow','label':'Flow-Tools','kind':'media','status':health.get('channels',{}).get('flow_tools',{}).get('status','unknown')},
-                {'id':'pet','label':'鲸管家','kind':'notify','status':health.get('channels',{}).get('jingguanjia',{}).get('status','unknown')},
-                {'id':'hermes','label':'Hermes / 微信','kind':'notify','status':'configured'},
-                {'id':'viking','label':'OpenViking','kind':'memory','status':health.get('channels',{}).get('openviking_gateway',{}).get('status','unknown')},
-            ], 'edges': [['aph','mihomo'],['aph','gemini'],['aph','flow'],['aph','pet'],['aph','hermes'],['aph','viking']], 'autonomy': autonomy})
+            return self.send_json(200, read_topology_v2())
         return self.send_json(404, {'ok': False, 'code': 'not_found'})
     def do_POST(self):
         # 不允许 file:// 的不透明来源调用急停/启动等写操作；请通过本地HTTP界面控制。

@@ -951,9 +951,10 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     """Detect/recover the known local mihomo runner; no rebinding or paid calls."""
     from core.resident_engineer import ResidentEngineer
     # 默认指向与源码仓库同级部署的正式运行副本；找不到时回退源码仓库自身 runner。
-    default_runner = ROOT_DIR.parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"
+    from pathlib import Path as _P
+    default_runner = _P(ROOT_DIR).parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"
     if not default_runner.exists():
-        default_runner = ROOT_DIR / "silent-run.bat"
+        default_runner = _P(ROOT_DIR) / "silent-run.bat"
     runner = args.get("runner") or str(default_runner)
     result = ResidentEngineer().dispatch("recover_mihomo", {"runner": runner, "wait_seconds": args.get("wait_seconds", 12), "ports": args.get("ports")})
     if result.get("ok") and not result.get("result", {}).get("ok", False):
@@ -963,6 +964,7 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
         # ResidentEngineer.recover_mihomo 是统一恢复出口，通知结果已在其 result 中。
         result["notifications"] = result.get("result", {}).get(
             "notifications", {"jingguanjia": False, "hermes_weixin": False})
+        result["action"] = result.get("result", {}).get("action", "recover_mihomo")
     return result
 
 

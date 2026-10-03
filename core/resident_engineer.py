@@ -169,6 +169,17 @@ class ResidentEngineer:
         recovered = bool(after.get("ok") and all(row.get("open") for row in after.get("ports", [])))
         result = {"ok": recovered, "action": "recover_mihomo", "before": before, "after": after,
                   "runner": str(runner_path), "paid_calls": False, "bindings_changed": False}
+        # 真实修复动作必须落账，供 EVA 全栈拓扑修復記錄与审计回溯。
+        try:
+            state = self.load_state()
+            state["events"] = (state.get("events") or [])[-99:] + [{
+                "at": _utc_now(), "type": "recover_mihomo_ok" if recovered else "recover_mihomo_failed",
+                "details": {"ports_checked": [row.get("port") for row in after.get("ports", [])],
+                            "already_running": bool(existing and existing.returncode == 0 and existing.stdout.strip() not in ('', '0'))},
+            }]
+            self.save_state(state)
+        except Exception:
+            pass
         if recovered:
             # 统一放在实际恢复成功出口，覆盖MCP、EVA和其他本地调用；失败通知不阻塞内核。
             try:
