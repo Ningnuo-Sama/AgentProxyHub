@@ -7,6 +7,7 @@
 ## 版本入口
 
 - 上一冻结源码：`696c399784c7ef564307cb1b112c384762d273d4`
+- 当前已验证策略提交：`fca7bf4`（验证码 dry-run 核心、Hermes 严格结果判定、专项测试；未部署）
 - 分支：`main`
 - 正式副本：`D:\Program Files\AgentProxyHub`，未同步即标记 `runtime_sync=blocked`。
 - 每次变更记录源码 SHA、运行副本 SHA、数据快照位置和回退点。
