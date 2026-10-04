@@ -1,11 +1,29 @@
 """Best-effort multi-channel alert dispatch; payloads contain no credentials."""
 from __future__ import annotations
+import json
 import os
 import subprocess
-import json
 from typing import Any
-from pathlib import Path
 from .jingguanjia_notify import notify_jingguanjia
+
+
+def _hermes_result(completed: subprocess.CompletedProcess[str]) -> tuple[bool, dict[str, Any]]:
+    """Require both a successful process exit and Hermes JSON success=true."""
+    raw = (completed.stdout or completed.stderr or "").strip()
+    detail: dict[str, Any] = {"returncode": completed.returncode}
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        payload = {}
+    if isinstance(payload, dict):
+        if payload.get("success") is True:
+            detail["status"] = "sent"
+            return completed.returncode == 0, detail
+        error = payload.get("error") or payload.get("message")
+        if error:
+            detail["error"] = str(error)[:240]
+    detail["status"] = "failed"
+    return False, detail
 
 
 def notify_all(text: str, *, event_id: str | None = None, emote: str = "work", motion: str = "wiggle") -> dict[str, Any]:
@@ -24,14 +42,9 @@ def notify_all(text: str, *, event_id: str | None = None, emote: str = "work", m
                 completed = subprocess.run([exe, "send", "--to", target, "--json", text[:2000]],
                                            capture_output=True, text=True, timeout=20,
                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=False)
-                result["hermes_weixin"] = completed.returncode == 0
-                result["hermes_detail"] = {"returncode": completed.returncode, "status": "sent" if completed.returncode == 0 else "failed"}
-                if completed.returncode != 0:
-                    try:
-                        payload = json.loads((completed.stdout or completed.stderr or "{}").strip())
-                        result["hermes_detail"]["error"] = str(payload.get("error") or payload.get("message") or "delivery_failed")[:240]
-                    except (ValueError, TypeError):
-                        result["hermes_detail"]["error"] = "delivery_failed"
+                sent, detail = _hermes_result(completed)
+                result["hermes_weixin"] = sent
+                result["hermes_detail"] = detail
             except (OSError, subprocess.SubprocessError):
                 result["hermes_detail"] = {"status": "exception"}
         else:
@@ -39,5 +52,6 @@ def notify_all(text: str, *, event_id: str | None = None, emote: str = "work", m
     else:
         result["hermes_detail"] = {"status": "disabled"}
     return result
+
 
 __all__ = ["notify_all"]
