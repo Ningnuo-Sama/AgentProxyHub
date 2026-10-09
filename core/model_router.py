@@ -61,7 +61,7 @@ def _credential(kind: str) -> tuple[str, str]:
 
 def _post(base: str, key: str, model: str, messages: list[Mapping[str, str]], *, timeout: float = 30) -> dict[str, Any]:
     url = base.rstrip("/") + "/chat/completions"
-    payload = json.dumps({"model": model, "messages": messages, "temperature": 0, "max_tokens": 160}, ensure_ascii=False).encode("utf-8")
+    payload = json.dumps({"model": model, "messages": messages, "temperature": 0, "max_tokens": 800}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=payload, method="POST", headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", "replace"))

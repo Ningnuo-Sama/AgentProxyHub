@@ -24,17 +24,26 @@ If Not fso.FileExists(runner) Then WScript.Quit 4
 
 Set wmi = GetObject("winmgmts:\\.\root\cimv2")
 Set procs = wmi.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name='mihomo.exe'")
-If procs.Count > 0 Then WScript.Quit 1
-
-logDir = dir & "\logs"
-If Not fso.FolderExists(logDir) Then fso.CreateFolder(logDir)
-logFile = logDir & "\bridge.log"
-If fso.FileExists(logFile) Then
-    If fso.GetFile(logFile).Size > 5242880 Then fso.DeleteFile logFile, True
-End If
 
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = dir
-sh.Run q & runner & q, 0, False
+
+If procs.Count = 0 Then
+    logDir = dir & "\logs"
+    If Not fso.FolderExists(logDir) Then fso.CreateFolder(logDir)
+    logFile = logDir & "\bridge.log"
+    If fso.FileExists(logFile) Then
+        If fso.GetFile(logFile).Size > 5242880 Then fso.DeleteFile logFile, True
+    End If
+    sh.Run q & runner & q, 0, False
+End If
+
+' Launch resident scheduler daemon if exists
+Dim daemonStarter
+daemonStarter = dir & "\resident-daemon-start.vbs"
+If Not fso.FileExists(daemonStarter) Then daemonStarter = dir & "\scripts\resident-daemon-start.vbs"
+If fso.FileExists(daemonStarter) Then
+    sh.Run "cscript //nologo " & q & daemonStarter & q, 0, False
+End If
 
 WScript.Quit 0

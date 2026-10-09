@@ -105,6 +105,11 @@ def start():
 
 
 def stop():
+    from .tun_controller import TunController
+    try:
+        TunController(PERSONAL_CONFIG).disable_tun()
+    except Exception:
+        pass
     from .personal_route_state import close_personal
     result = close_personal()
     return {**result, 'label': '出海介入'}

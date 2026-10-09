@@ -477,6 +477,47 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
         "message": f"成功锁定环境 [{profile}] 对应出口端口 {port}，维持 IP 粘性。"
     }
 
+
+def tool_hot_swap_port_node(args: Dict[str, Any]) -> Any:
+    """对指定端口在底层热替换上游 Proxy（只换节点，不换业务端口）。"""
+    port = args.get("port")
+    if not port:
+        return {"success": False, "error": "必须提供 port 参数"}
+    proxy = args.get("proxy")
+    reason = args.get("reason", "agent_invoked_hot_swap")
+
+    try:
+        from core.hot_swap_executor import hot_swap_port_node, auto_heal_port
+        if proxy:
+            res = hot_swap_port_node(int(port), str(proxy).strip(), reason=reason)
+        else:
+            res = auto_heal_port(int(port), reason=reason)
+        return {
+            "success": bool(res.get("ok")),
+            "result": res,
+            "port_kept_sticky": True,
+            "bindings_changed": False,
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)[:200], "bindings_changed": False}
+
+
+def tool_self_heal_ports(args: Dict[str, Any]) -> Any:
+    """全自动扫描并自愈送中或离线的一票否决端口。"""
+    scope = args.get("scope", "bound")
+    try:
+        from core.hot_swap_executor import scan_and_heal_all
+        healed = scan_and_heal_all(scope=scope)
+        return {
+            "success": True,
+            "healed_count": len(healed),
+            "results": healed,
+            "ports_kept_sticky": True,
+            "bindings_changed": False,
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)[:200], "bindings_changed": False}
+
 def tool_get_profile_bindings(args: Dict[str, Any]) -> Any:
     """查看环境锁定账本 + Antigravity 账号粘性锚定（两套绑定互不相干）"""
     bindings = get_bindings_data()
@@ -846,11 +887,36 @@ def _get_resident_scheduler():
         from core.alert_dispatch import notify_all
         from core.resident_scheduler import ResidentScheduler
         state = AutonomyState()
+
+        def _live_health_check():
+            try:
+                from core.confidence_engine import run as run_confidence
+                from core.hot_swap_executor import scan_and_heal_all
+                c_state = run_confidence(scope="bound", explicit=[], auto_heal=True)
+                ports = c_state.get("ports", {})
+                vetoed = [int(p) for p, r in ports.items() if r.get("vetoed")]
+                healed = []
+                if vetoed:
+                    healed = scan_and_heal_all(scope="bound")
+                return {
+                    "status": "ok" if not vetoed or all(h.get("ok") for h in healed) else "warning",
+                    "source": "live_confidence_and_healing",
+                    "probed_ports_count": len(ports),
+                    "vetoed_ports": vetoed,
+                    "auto_healed": healed,
+                }
+            except Exception as exc:
+                return {
+                    "status": "warning",
+                    "source": "fallback_local_snapshot",
+                    "error": str(exc)[:200],
+                    "confidence_state": os.path.exists(CONFIDENCE_STATE_FILE),
+                }
+
         _RESIDENT_SCHEDULER = ResidentScheduler(
             state=state,
             events=EventStore(),
-            health_check=lambda: {"status": "ok", "source": "local_snapshot",
-                                  "confidence_state": os.path.exists(CONFIDENCE_STATE_FILE)},
+            health_check=_live_health_check,
             notifier=lambda text, **kwargs: notify_all(text, event_id=kwargs.get("event_id")),
             interval_seconds=float(os.environ.get("APHUB_RESIDENT_INTERVAL", "300")),
         )
@@ -858,7 +924,7 @@ def _get_resident_scheduler():
 
 
 def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
-    """执行受限自治维护动作：开关、启动/停止、清理事件或查看摘要。"""
+    """执行受限自治维护动作：开关、启动/停止、清理事件、热替换自愈或查看摘要。"""
     try:
         from core.autonomy_core import AutonomyState, EventStore
         action = str(args.get("action") or "status").strip().lower()
@@ -869,6 +935,25 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": bool(result.get("success")), "action": action, "result": result,
                     "auto_rebind": True, "paid_calls": False,
                     "bindings_changed": bool(result.get("bindings_changed"))}
+        if action == "hot_swap":
+            from core.hot_swap_executor import hot_swap_port_node
+            port = int(args.get("port") or 0)
+            proxy = str(args.get("proxy") or "").strip()
+            if not port or not proxy:
+                return {"ok": False, "error": "port and proxy are required for hot_swap"}
+            res = hot_swap_port_node(port, proxy, reason=str(args.get("reason") or "manual_mcp_hot_swap"))
+            return {"ok": bool(res.get("ok")), "action": action, "result": res}
+        if action == "auto_heal":
+            from core.hot_swap_executor import auto_heal_port
+            port = int(args.get("port") or 0)
+            if not port:
+                return {"ok": False, "error": "port is required for auto_heal"}
+            res = auto_heal_port(port, reason=str(args.get("reason") or "manual_mcp_auto_heal"))
+            return {"ok": bool(res.get("ok")), "action": action, "result": res}
+        if action == "scan_heal":
+            from core.hot_swap_executor import scan_and_heal_all
+            res = scan_and_heal_all(scope=str(args.get("scope") or "bound"))
+            return {"ok": True, "action": action, "healed_count": len(res), "results": res}
         if action in scheduler_actions:
             scheduler = _get_resident_scheduler()
             if action == "start":
@@ -899,7 +984,7 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": True, "action": action, "removed": removed}
         if action == "summary":
             return {"ok": True, "action": action, "summary": store.summary(retention_days=int(args.get("retention_days", 7)))}
-        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "auto_rebind", "cleanup", "summary"]}
+        return {"ok": False, "code": "unknown_action", "allowed": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "auto_rebind", "hot_swap", "auto_heal", "scan_heal", "cleanup", "summary"]}
     except (ValueError, TypeError, OSError) as exc:
         return {"ok": False, "code": "autonomy_action_failed", "error": str(exc)[:200], "recoverable": True}
 
@@ -930,6 +1015,16 @@ def tool_vault_status(args: Dict[str, Any]) -> Dict[str, Any]:
                 "read_only": True, "path": str(MANIFEST)}
     except (OSError, ValueError, TypeError) as exc:
         return {"ok": False, "code": "vault_unavailable", "error": str(exc)[:160], "read_only": True}
+
+
+def tool_captcha_policy_decision(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Fail-closed captcha dry-run; never contacts a provider or returns secrets."""
+    from core.captcha_policy import decide
+    request = dict(args or {})
+    request.setdefault("mode", "dry_run")
+    request.setdefault("contract_version", 1)
+    request_id = str(request.get("request_id") or "")
+    return decide(request).as_dict(request_id, request.get("budget"))
 
 
 def tool_model_policy(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -989,55 +1084,105 @@ def tool_channel_health(args: Dict[str, Any]) -> Dict[str, Any]:
     targets = {
         "gemini_antigravity": "http://127.0.0.1:8045/health",
         "flow_tools": "http://127.0.0.1:8001/health",
+        "openviking_core": "http://127.0.0.1:1933/health",
         "openviking_gateway": "http://127.0.0.1:18790/health",
         "jingguanjia": "http://127.0.0.1:8766/health",
     }
+    alias_map = {
+        "openviking": ["openviking_core", "openviking_gateway"],
+        "openviking_core": ["openviking_core"],
+        "openviking_gateway": ["openviking_gateway"],
+        "viking": ["openviking_core", "openviking_gateway"],
+        "gemini": ["gemini_antigravity"],
+        "antigravity": ["gemini_antigravity"],
+        "gemini_antigravity": ["gemini_antigravity"],
+        "flow": ["flow_tools"],
+        "flow_tools": ["flow_tools"],
+        "jingguanjia": ["jingguanjia"],
+        "pet": ["jingguanjia"],
+        "glm": ["glm"],
+        "kie": ["kie"],
+        "aicost": ["aicost"],
+        "cliproxyapi": ["cliproxyapi"],
+    }
     requested = args.get("channels")
+    filter_active = False
+    requested_set = set()
     if isinstance(requested, list) and requested:
-        targets = {k: v for k, v in targets.items() if k in requested}
+        filter_active = True
+        for item in requested:
+            norm = str(item or "").strip().lower()
+            if norm in alias_map:
+                requested_set.update(alias_map[norm])
+            else:
+                requested_set.add(norm)
+
+    active_targets = {k: v for k, v in targets.items() if k in requested_set} if filter_active else targets
+
     result = {}
-    for name, url in targets.items():
+    for name, url in active_targets.items():
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:
-                result[name] = {"status": "ok", "http_status": response.status, "url": url}
+            req = urllib.request.Request(url, headers={"User-Agent": "AgentProxyHub/1.0"})
+            with urllib.request.urlopen(req, timeout=2) as response:
+                body = {}
+                try:
+                    body = json.loads(response.read().decode("utf-8", "replace"))
+                except Exception:
+                    pass
+                row = {"status": "ok", "http_status": response.status, "url": url}
+                if isinstance(body, dict):
+                    for field in ("version", "healthy", "upstream_status", "mode", "gateway", "auth_mode"):
+                        if field in body:
+                            row[field] = body[field]
+                result[name] = row
         except Exception as exc:
             result[name] = {"status": "unavailable", "url": url, "error": type(exc).__name__}
-    glm_key = ""
-    glm_base = "https://open.bigmodel.cn/api/paas/v4"
-    try:
-        from core.model_router import _credential
-        glm_base, glm_key = _credential("glm")
-        if glm_key:
-            request = urllib.request.Request(glm_base + "/models", headers={"Authorization": f"Bearer {glm_key}"})
-            with urllib.request.urlopen(request, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                models = {str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict)}
-                result["glm"] = {"status": "ok", "http_status": response.status,
-                                  "model_verified": "glm-5.3-flash" in models,
-                                  "model": "glm-5.3-flash", "paid_probe": False}
-        else:
-            result["glm"] = {"status": "not_configured", "paid_probe": False}
-    except Exception as exc:
-        result["glm"] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
-    visual_cfg = r"D:\GitHub\ariadne\tools\ariadne-visual-pro\config.local.json"
-    try:
-        with open(visual_cfg, "r", encoding="utf-8-sig") as handle:
-            visual = json.load(handle)
-    except Exception:
-        visual = {}
-    for name, url, key_name in (("kie", "https://api.kie.ai/api/v1/chat/credit", "kie_api_key"),
-                                ("aicost", "https://www.aicost.me/v1/models", "aicost_api_key")):
-        key = str(visual.get(key_name) or "").strip()
-        if not key:
-            result[name] = {"status": "not_configured", "paid_probe": False}
-            continue
+
+    if not filter_active or "glm" in requested_set:
+        glm_key = ""
+        glm_base = "https://open.bigmodel.cn/api/paas/v4"
         try:
-            request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
-            with urllib.request.urlopen(request, timeout=5) as response:
-                result[name] = {"status": "ok", "http_status": response.status, "paid_probe": False}
+            from core.model_router import _credential
+            glm_base, glm_key = _credential("glm")
+            if glm_key:
+                request = urllib.request.Request(glm_base + "/models", headers={"Authorization": f"Bearer {glm_key}"})
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    models = {str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict)}
+                    result["glm"] = {"status": "ok", "http_status": response.status,
+                                      "model_verified": "glm-5.3-flash" in models,
+                                      "model": "glm-5.3-flash", "paid_probe": False}
+            else:
+                result["glm"] = {"status": "not_configured", "paid_probe": False}
         except Exception as exc:
-            result[name] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
-    result["cliproxyapi"] = {"status": "not_running", "ports": [8318, 8319]}
+            result["glm"] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
+
+    check_external_visual = not filter_active or ("kie" in requested_set or "aicost" in requested_set)
+    if check_external_visual:
+        visual_cfg = r"D:\GitHub\ariadne\tools\ariadne-visual-pro\config.local.json"
+        try:
+            with open(visual_cfg, "r", encoding="utf-8-sig") as handle:
+                visual = json.load(handle)
+        except Exception:
+            visual = {}
+        for name, url, key_name in (("kie", "https://api.kie.ai/api/v1/chat/credit", "kie_api_key"),
+                                    ("aicost", "https://www.aicost.me/v1/models", "aicost_api_key")):
+            if filter_active and name not in requested_set:
+                continue
+            key = str(visual.get(key_name) or "").strip()
+            if not key:
+                result[name] = {"status": "not_configured", "paid_probe": False}
+                continue
+            try:
+                request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    result[name] = {"status": "ok", "http_status": response.status, "paid_probe": False}
+            except Exception as exc:
+                result[name] = {"status": "unavailable", "paid_probe": False, "error": type(exc).__name__}
+
+    if not filter_active or "cliproxyapi" in requested_set:
+        result["cliproxyapi"] = {"status": "not_running", "ports": [8318, 8319]}
+
     return {"ok": True, "channels": result, "paid_calls": False, "bindings_changed": False}
 
 
@@ -1113,6 +1258,24 @@ def tool_notify_jingguanjia(args: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 TOOLS = [
+    {
+        "name": "captcha_policy_decision",
+        "description": "验证码策略 dry-run；仅返回 fail-closed 决策，不创建任务、不返回 token 或凭据",
+        "inputSchema": {"type": "object", "additionalProperties": False, "properties": {
+            "contract_version": {"type": "integer", "const": 1},
+            "mode": {"type": "string", "enum": ["dry_run"]},
+            "request_id": {"type": "string"},
+            "operation": {"type": "string"},
+            "stage": {"type": "string"},
+            "route": {"type": "string"},
+            "captcha_provider": {"type": "string"},
+            "prior_error_category": {"type": ["string", "null"]},
+            "prior_upstream_status": {"type": ["string", "null"]},
+            "attempt": {"type": "integer"},
+            "budget": {"type": "object"}
+        }, "required": ["request_id", "operation"]},
+        "handler": tool_captcha_policy_decision
+    },
     {
         "name": "mineru_ocr",
         "description": "MinerU官方OCR；默认dry_run，submit成功上传后返回job_id，status单次查询并将结果落盘；精准模式内部读DPAPI金库，Agent模式无token；不返回签名URL或凭据，费用/置信度unknown",
@@ -1211,12 +1374,16 @@ TOOLS = [
     },
     {
         "name": "autonomy_action",
-        "description": "管理自治开关、清理7天事件或查看摘要；不改绑定、不启动付费任务",
+        "description": "管理自治开关、热替换自愈、启动/停止常驻巡检、清理事件或查看摘要；不碰付费服务",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "cleanup", "summary"], "default": "status"},
+                "action": {"type": "string", "enum": ["status", "set_switches", "start", "stop", "scheduler_status", "run_once", "hot_swap", "auto_heal", "scan_heal", "cleanup", "summary"], "default": "status"},
                 "switches": {"type": "object", "description": "可选开关：enabled、routing_enabled、download_guard_enabled"},
+                "port": {"type": "integer", "description": "目标端口 (hot_swap/auto_heal 必需)"},
+                "proxy": {"type": "string", "description": "指定上游节点 (hot_swap 可选)"},
+                "reason": {"type": "string", "description": "热替换或自愈原因"},
+                "scope": {"type": "string", "description": "扫描范围 (bound/all)", "default": "bound"},
                 "retention_days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 7}
             }
         },
@@ -1413,6 +1580,31 @@ TOOLS = [
             }
         },
         "handler": tool_audit_confidence
+    },
+    {
+        "name": "hot_swap_port_node",
+        "description": "对指定端口的底层物理节点执行无感热替换（只换底层节点，不换业务端口）；调用 Mihomo API 重载并校验 Google 国家，失败自动回滚",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "port": {"type": "integer", "description": "业务锁定的本地端口号 (如 22010)"},
+                "proxy": {"type": "string", "description": "可选指定的目标节点名称 (如 xc-22004)；未提供则由系统根据同大区高分策略自动选择"},
+                "reason": {"type": "string", "description": "热替换原因说明 (如 sent_to_china, node_offline)", "default": "manual_or_agent_hot_swap"}
+            },
+            "required": ["port"]
+        },
+        "handler": tool_hot_swap_port_node
+    },
+    {
+        "name": "self_heal_ports",
+        "description": "全自动扫描现役绑定端口并自愈：对送中 (China) 或离线节点自动在同大区内挑选健康节点热替换，业务端口保持绝对不动",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "description": "扫描范围: bound(现役+保护端口) 或 all", "default": "bound"}
+            }
+        },
+        "handler": tool_self_heal_ports
     }
 ]
 

@@ -185,6 +185,15 @@
 
 - 日志门卫清洗：在EVA适配层入口做轻量字段化清洗，不做复杂NLP、不阻塞采集。Flow任务统一为“账号 生成图片/生成视频 · 模型 · 成功/失败 · 耗时 · 通道”；Antigravity请求统一为“模型 请求 · 成功/失败 · HTTP状态 · 耗时”；Mihomo结构化time/level/msg压成“时间 · 消息”，其余源压缩空白并截断500字符。原始日志仍留在各自文件/数据库，EVA只展示清洗结果。flow_tasks与antigravity_requests现场输出验证，80测试通过。
 
+- 2026-10-07 上游自动更新补链（蜂窝/风窝源）：`provider_a` 原走 `https://fengwo.io/api/v1/user/server/fetch` + web token，实测内置UA/ClashUA/不带凭据三种请求**均返回 403**，token 已失效；该机场只提供私有 `fengwo-v2://` 订阅协议，无订阅直链可拉，故改为与星辰同款「本机客户端档 + 每日校验落库」模式。新增 `data/refresh-fengwo-profile.ps1`（取 `%APPDATA%\com.follow\*\profiles\*.yaml` 最新档，校验 >30KB 且节点条目 ≥80 才覆盖 `data/fengwo_profile.yaml`，否则保留 last-known-good 并以退出码 1 报告）、`data/install-fengwo-refresh-task.ps1`（任务 `AgentProxyHub-fengwo-profile-refresh`，每日 06:20，StartWhenAvailable）、`data/install-upstream-refresh-task.ps1`（任务 `AgentProxyHub-upstream-refresh`，每日 06:40，调用 `refresh_sources` 把两份本地档刷进 `data/upstream_nodes.json`；此前**没有任何自动流程会调用 `refresh_sources`**，常驻 scheduler 明确不刷付费上游）。`provider_a` 注册改为 `profile_path`，原接口端点、失效状态与套餐信息保留在 extra。实测一次刷新：provider_a 87 + provider_b 46 = 133，无失败源；两个新任务均已真实 Register 并强制试跑返回 `LastTaskResult=0`。备份 `data/upstreams.json.bak-20261007-1600`。端口池重建仍为人工触发（`--rebuild` 会改写运行配置并重载内核，不动在跑的绑定）。
+- 2026-10-07 工具链坑记录：经 MCP `set_upstream_credential` 写含中文的 name/extra 时服务端报 `'utf-8' codec can't encode character '\udc90'`（该 MCP stdio 非 UTF-8），改用原子改写 `data/upstreams.json` 完成同一变更；后续涉及中文参数的 MCP 工具（write 方向）需先小样验证编码。
+- 2026-10-09 稳定基线固化（v2.0.0-stable，死循环自愈根治与静默巡检落地）：
+  1. 根治死循环频繁换绑：`core/hot_swap_executor.py` 换绑成功且复核出口健康后，原子同步写回 `confidence_state.json`，清除 `vetoed` 状态与 `vetoReason`，标记健康得分并记录 `lastHealedTime`，切断死循环重复换绑源头。
+  2. 防震荡冷却门禁：`scan_and_heal_all` 增加 1 小时（3600 秒）防抖冷却门禁（`Anti-Flapping Cooldown`），同端口 1 小时内严禁重复自动换绑，彻底锁死 A ↔ B 节点乒乓横跳。
+  3. 巡检静默与仅紧急告警：`core/resident_scheduler.py` 增加 `emergency_only` 机制（默认 True）；日常巡检正常与系统自动自治 100% 彻底静默（`routine_ok_silent`），禁止向微信群发常规巡检消息；仅当出现自愈失败（备选节点耗尽）、探针崩溃或服务严重故障时，才触发高保真结构化告警 `🚨【AgentProxyHub 紧急告警：需人工介入】`。
+  4. 修复异常吞没伪装：修复 `mcp/server.py` 探针异常时返回 `status: ok` 的 Bug，改回 `status: warning` 真实暴露异常。
+  5. 历史状态清洗与现场验收：清洗 `data/confidence_state.json` 中 27 个死循环残留的假性 vetoed 端口；双目录（`D:\Program Files\AgentProxyHub` 与 `D:\GitHub\AgentProxyHub`）完全同步；现役 29 个端口全量实测 S/A 级健康存活，实测 `--once` 换绑为 0、微信通知为 0（`notified: false`）。代码与运行态正式冻结为稳定基线。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |

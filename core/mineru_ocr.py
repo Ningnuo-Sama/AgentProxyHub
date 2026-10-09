@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import requests
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -73,6 +74,17 @@ def _request(method, url, *, headers=None, data=None, limit=1024 * 1024):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     started = time.monotonic()
     try:
+        if method == "PUT":
+            if hasattr(data, "read"):
+                data = data.read(MAX_RESULT + 1)
+            session = requests.Session()
+            session.trust_env = False
+            response = session.put(url, data=data, headers=headers or {}, allow_redirects=False, timeout=TIMEOUT)
+            if response.status_code not in (200, 201):
+                raise OcrError("mineru_http_error", http_status=response.status_code)
+            return response.content
+        if hasattr(data, "read"):
+            data = data.read(MAX_RESULT if method == "PUT" else 1024 * 1024 * 1024)
         request = urllib.request.Request(url, data=data, method=method, headers=headers or {})
         with opener.open(request, timeout=TIMEOUT) as response:
             if response.status not in (200, 201):
@@ -259,7 +271,9 @@ def run(args):
             if hashlib.file_digest(handle, "sha256").hexdigest() != digest:
                 raise OcrError("ocr_source_changed")
             handle.seek(0)
-            _request("PUT", upload, headers={"Content-Length": str(size)}, data=handle)
+            # MinerU 官方示例对签名 PUT 只传 data，不自行补 Content-Length/Content-Type；
+            # 由 urllib/OSS 处理请求 framing，避免签名头不匹配。
+            _request("PUT", upload, headers={}, data=handle)
         _save(ROOT / "mineru-jobs" / (job_id + ".json"), json.dumps({"api": api, "remote_id": remote, "source_sha256": digest}).encode())
         return dict(base, ok=True, executed=True, code="mineru_submitted", status="submitted", job_id=job_id)
     except OcrError as exc:

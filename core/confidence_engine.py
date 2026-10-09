@@ -85,6 +85,7 @@ def probe_google_country(port: int, timeout: float = 8.0) -> str:
            "https://policies.google.com/terms"]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace",
                             creationflags=0x08000000, timeout=timeout + 3)
         body = cp.stdout or ""
         import re
@@ -110,6 +111,7 @@ def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
                "-w", "\n%{time_total}", url]
         try:
             cp = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace",
                                 creationflags=0x08000000, timeout=timeout + 5)
             return cp.returncode, cp.stdout.strip()
         except Exception:
@@ -328,7 +330,8 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
             rec["driftPenalty"] = max(0.0, p0 * (1 - hours / 48.0)) if p0 else 0.0
 
     # ---- 计算总分 ----
-    vetoed = bool(rec.get("offline")) or bool(node and node.get("isSentToChina"))
+    sent_to_china = bool(node and node.get("isSentToChina")) or (str(google_country).strip().lower() == "china")
+    vetoed = bool(rec.get("offline")) or sent_to_china
     ban_left = hours_since(rec.get("vetoUntil")) or 0.0
     if rec.get("vetoUntil") and ban_left < 0:
         vetoed = True   # 洲际漂移禁用期未满（hours_since 为负表示尚未到期）
@@ -340,7 +343,7 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
     rec["tier"] = tier_of(rec["score"], vetoed)
     rec["vetoed"] = vetoed
     rec["vetoReason"] = ("offline" if rec.get("offline")
-                         else "sent_to_china" if node and node.get("isSentToChina")
+                         else "sent_to_china" if sent_to_china
                          else "cross_continent_ban" if vetoed else "")
     rec["observeHours"] = round(hours_since(rec.get("stableSince")) or 0.0, 1)
     rec["updatedAt"] = now
@@ -367,7 +370,7 @@ def select_ports(scope: str, explicit: List[int]) -> List[int]:
             ports.add(p)
     return sorted(ports)
 
-def run(scope: str, explicit: List[int], max_workers: int = 8) -> Dict[str, Any]:
+def run(scope: str, explicit: List[int], max_workers: int = 8, auto_heal: bool = True) -> Dict[str, Any]:
     nodes = load_nodes_index()
     state = load_state()
     ports = select_ports(scope, explicit)
@@ -387,6 +390,42 @@ def run(scope: str, explicit: List[int], max_workers: int = 8) -> Dict[str, Any]
     state["updatedAt"] = now_iso()
     save_state(state)
     print(f"[confidence] 完成，耗时 {time.time()-t0:.0f}s → {STATE_FILE}")
+
+    # 自动自愈闭环：对现役绑定端口如果处于一票否决状态（送中、离线），自动触发节点热替换
+    if auto_heal:
+        bound_ports = set()
+        try:
+            with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8") as f:
+                for v in json.load(f).values():
+                    p = v.get("port") if isinstance(v, dict) else None
+                    if p:
+                        bound_ports.add(int(p))
+        except Exception:
+            pass
+        # 兼容 Antigravity 账号粘性保护端口段
+        antigravity_ports = {21010, 21012, 21014, 22002, 22010, 22021, 22023, 22024, 22038}
+        protect_ports = bound_ports | antigravity_ports
+
+        for p in ports:
+            if p in protect_ports:
+                rec = state["ports"].get(str(p), {})
+                if rec.get("vetoed") and rec.get("vetoReason") in ("sent_to_china", "offline"):
+                    print(f"[confidence-heal] 发现保护端口 {p} 被否决 ({rec.get('vetoReason')})，正在触发自动热替换自愈...")
+                    try:
+                        from .hot_swap_executor import auto_heal_port
+                        heal_res = auto_heal_port(p, reason=rec.get("vetoReason"))
+                        if heal_res.get("ok"):
+                            print(f"[confidence-heal] 端口 {p} 成功自愈热替换为 {heal_res.get('new_proxy')} ({heal_res.get('verified_country')})")
+                            # 立即重测该端口并更新记录
+                            new_probe = probe_port(p)
+                            update_record(p, new_probe, nodes.get(p), rec)
+                            state["ports"][str(p)] = rec
+                            save_state(state)
+                        else:
+                            print(f"[confidence-heal] 端口 {p} 自愈失败: {heal_res.get('error')}")
+                    except Exception as e:
+                        print(f"[confidence-heal] 端口 {p} 自愈异常: {e}")
+
     return state
 
 def show() -> None:
