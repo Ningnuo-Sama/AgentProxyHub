@@ -370,11 +370,13 @@ def select_ports(scope: str, explicit: List[int]) -> List[int]:
     # bound：现役绑定端口（bindings.json）+ S/A 级静态节点
     ports = set()
     try:
-        with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8") as f:
-            for v in json.load(f).values():
-                p = v.get("port") if isinstance(v, dict) else None
-                if p:
-                    ports.add(int(p))
+        with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8-sig") as f:
+            content = f.read().strip()
+            if content:
+                for v in json.loads(content).values():
+                    p = v.get("port") if isinstance(v, dict) else None
+                    if p:
+                        ports.add(int(p))
     except Exception:
         pass
     for p, n in nodes.items():
@@ -409,11 +411,13 @@ def run(scope: str, explicit: List[int], max_workers: int = 8, auto_heal: bool =
     if auto_heal:
         bound_ports = set()
         try:
-            with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8") as f:
-                for v in json.load(f).values():
-                    p = v.get("port") if isinstance(v, dict) else None
-                    if p:
-                        bound_ports.add(int(p))
+            with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8-sig") as f:
+                content = f.read().strip()
+                if content:
+                    for v in json.loads(content).values():
+                        p = v.get("port") if isinstance(v, dict) else None
+                        if p:
+                            bound_ports.add(int(p))
         except Exception:
             pass
         # 兼容 Antigravity 账号粘性保护端口段

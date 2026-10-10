@@ -287,7 +287,7 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
                     modified = True
 
     if not modified:
-        return {"ok": False, "error": f"port_{port}_listeners_not_found_in_config"}
+        return {"ok": False, "port": port, "error": f"port_{port}_listeners_not_found_in_config"}
 
     # 原子写入新配置
     temp_path = CONFIG_PATH.with_suffix(".tmp")
@@ -301,7 +301,7 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
     except Exception as exc:
         # 重载异常立即回滚
         shutil.copy2(backup_file, CONFIG_PATH)
-        return {"ok": False, "error": f"mihomo_hot_reload_failed: {exc}", "rolled_back": True}
+        return {"ok": False, "port": port, "error": f"mihomo_hot_reload_failed: {exc}", "rolled_back": True}
 
     # 4. 现场复核新出口
     verified_country = probe_google_country(port, timeout=8.0)
@@ -318,6 +318,7 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
         }, severity="action_required")
         return {
             "ok": False,
+            "port": port,
             "error": f"post_probe_unhealthy: google_country={verified_country}",
             "rolled_back": True,
         }
@@ -384,6 +385,24 @@ def auto_heal_port(port: int, reason: str = "auto_detect") -> Dict[str, Any]:
     return hot_swap_port_node(port, candidate["name"], reason=reason)
 
 
+def get_protected_bound_ports() -> Set[int]:
+    """获取所有在用绑定的保护端口集合（bindings.json + Antigravity粘性端口）。"""
+    bound_ports = set()
+    try:
+        if BINDINGS_FILE.exists():
+            with open(BINDINGS_FILE, "r", encoding="utf-8-sig") as f:
+                content = f.read().strip()
+                if content:
+                    for v in json.loads(content).values():
+                        p = v.get("port") if isinstance(v, dict) else None
+                        if p:
+                            bound_ports.add(int(p))
+    except Exception:
+        pass
+    antigravity_ports = {21010, 21012, 21014, 22002, 22010, 22021, 22023, 22024, 22038}
+    return bound_ports | antigravity_ports
+
+
 def scan_and_heal_all(scope: str = "bound") -> List[Dict[str, Any]]:
     """全自动巡检扫描并自愈所有送中或离线的一票否决端口。"""
     if not CONFIDENCE_FILE.exists():
@@ -393,11 +412,17 @@ def scan_and_heal_all(scope: str = "bound") -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+    active_scope = get_protected_bound_ports() if scope == "bound" else None
+
     results = []
     for port_str, rec in conf.items():
         try:
             port = int(port_str)
         except ValueError:
+            continue
+
+        # 核心保护：若限定为 bound 范围，非在用保护端口绝不触发全量热替换，避免误伤历史空闲端口！
+        if active_scope is not None and port not in active_scope:
             continue
 
         # 检查是否触发自愈条件：被一票否决、离线或最近一次实测为 China

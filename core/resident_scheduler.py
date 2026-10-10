@@ -36,14 +36,15 @@ def default_live_health_check() -> dict[str, Any]:
     try:
         from core.confidence_engine import run as run_confidence
         from core.hot_swap_executor import scan_and_heal_all
-        c_state = run_confidence(scope="bound", explicit=[], auto_heal=True)
+        c_state = run_confidence(scope="bound", explicit=[], auto_heal=False)
         ports = c_state.get("ports", {})
         vetoed = [int(p) for p, r in ports.items() if r.get("vetoed")]
         healed = []
         if vetoed:
             healed = scan_and_heal_all(scope="bound")
+        all_healed_ok = bool(healed) and all(h.get("ok") for h in healed)
         return {
-            "status": "ok" if not vetoed or all(h.get("ok") for h in healed) else "warning",
+            "status": "ok" if (not vetoed or all_healed_ok) else "warning",
             "source": "live_confidence_and_healing",
             "probed_ports_count": len(ports),
             "vetoed_ports": vetoed,
@@ -143,7 +144,7 @@ class ResidentScheduler:
                     f"• 状态：{health.get('status', 'error')} (等级: {severity})",
                 ]
                 if has_heal_failure:
-                    failed_ports = [h.get("port") for h in healed if not h.get("ok")]
+                    failed_ports = sorted(set(h.get("port") for h in healed if not h.get("ok") and h.get("port") is not None))
                     lines.append(f"• 自愈失败端口：{failed_ports} (备选节点已耗尽或换绑失败)")
                 elif vetoed and not healed:
                     lines.append(f"• 异常未恢复端口：{vetoed}")
