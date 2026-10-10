@@ -4,7 +4,8 @@
 
 核心契约（铁律）：
 1. 粘性端口神圣不可侵犯：业务层（Antigravity、Flow-Tools、指纹浏览器）绑定的本地端口永远不变。
-2. 只换节点，不换端口：当端口底层物理节点失效、离线或“送中”（GoogleCountry 判为 China）时，
+2. 只换节点，不换端口：当端口底层物理节点失效、离线或“送中”（Google 判定国命中
+   中国／香港／澳门，唯一判定入口见 core/blocked_regions.py）时，
    只在 AgentProxyHub 底座热替换该端口映射的上游 Proxy 节点。
 3. 大区一致性与防漂移：同国优先，其次同大区（美区->美区，东亚->东亚），严禁跨洲/跨大区盲目切换。
 4. 无感热重载与快速回滚：修改配置后通过 Mihomo Controller API (21909) 热重载；若新出口仍异常立即回滚。
@@ -23,6 +24,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+try:  # 包内导入（MCP / 调度器调用路径）
+    from .blocked_regions import is_blocked_google_country
+except ImportError:  # 允许以脚本方式直接运行
+    from blocked_regions import is_blocked_google_country
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
@@ -200,7 +206,7 @@ def select_candidate_node(port: int, current_proxy: Optional[str] = None) -> Dic
         
         last_probe = c_rec.get("lastProbe") or {}
         g_country = last_probe.get("googleCountry") or ""
-        if g_country.lower() == "china":
+        if is_blocked_google_country(g_country):
             continue
 
         cand_cc = last_probe.get("country") or c_rec.get("baselineCountry") or ""
@@ -299,7 +305,7 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
 
     # 4. 现场复核新出口
     verified_country = probe_google_country(port, timeout=8.0)
-    if verified_country.lower() == "china" or verified_country == "FAIL":
+    if is_blocked_google_country(verified_country) or verified_country == "FAIL":
         # 换上去依然送中或断网，立即回滚
         shutil.copy2(backup_file, CONFIG_PATH)
         call_mihomo_api("configs?force=true", method="PUT", body={"path": str(CONFIG_PATH.resolve())})
@@ -406,7 +412,7 @@ def scan_and_heal_all(scope: str = "bound") -> List[Dict[str, Any]]:
 
         needs_heal = False
         reason = ""
-        if g_country == "china" or veto_reason == "sent_to_china":
+        if is_blocked_google_country(g_country) or veto_reason == "sent_to_china":
             needs_heal = True
             reason = "sent_to_china"
         elif rec.get("offline") or veto_reason == "offline":

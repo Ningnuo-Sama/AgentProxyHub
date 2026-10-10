@@ -33,13 +33,13 @@
 
 - 🔌 **一节点一独立端口**：单订阅自动生成 80~120+ 独立本地端口池（双轨支持 SOCKS5 与 HTTP CONNECT），专供指纹浏览器做环境物理隔离。
 - 🎯 **多场景靶场与智能评判（Scene Matrix）**：
-  - **✨ 反重力 / Gemini**：Google 官方区域认证，彻底剔除“送中”节点；
+  - **✨ 反重力 / Gemini**：Google 官方区域认证，按 `core/blocked_regions.py` 单一红线剔除**中国 / 香港 / 澳门**出口，彻底根治“送中”与港澳锁区；
   - **🟣 Claude 专属**：直连 `api.anthropic.com`，防 Cloudflare 1020/403 封锁；
   - **🟢 ChatGPT / OpenAI**：API 高速通道实测，支持 SSE 流式稳定传输；
   - **🔵 Facebook / 海外社媒**：严格限定真实住宅/家宽 IP，剔除机房出口与重复 IP，保障养号粘性。
 - 🧩 **后人可随意扩展（`scenes.json` 驱动）**：界面与规则完全解耦，新增 TikTok、Twitter 或其他小众业务规则，只需在 JSON 追加几行，面板与 Agent 自动识别。
 - 🛡️ **智能自愈与防横跳震荡保护（Anti-Flapping & Auto-Healing）**：
-  - 探针实时监控出口置信度，遇节点离线或“送中”秒级自动热替换；
+  - 探针实时监控出口置信度，遇节点离线或“送中”（中国 / 香港 / 澳门）秒级自动热替换，且锁区出口永不进入候选池（可热替换的端口与节点名严格解耦，业务端口号永不变更）；
   - 内置状态闭环原子同步与 1 小时防抖冷却门禁（Anti-Flapping Cooldown），杜绝节点频繁横跳；
   - 巡检实行“仅紧急模式”（Emergency-Only），日常自愈 100% 彻底静默，仅在需人工介入时触发高保真结构化告警。
 - 🤖 **原生 MCP 服务（Model Context Protocol）**：暴露 `list_matched_proxies`、`bind_profile_proxy` 等标准工具，允许 Agent 在会话中自主查询、测绘、并把端口打入指定软件。

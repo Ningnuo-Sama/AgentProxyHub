@@ -33,8 +33,28 @@ class ResidentSchedulerTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertFalse(result["paid_calls"])
             self.assertFalse(result["bindings_changed"])
-            self.assertTrue(notifications)
+            # 2026-10-09 起 emergency_only 默认开启：日常健康巡检必须彻底静默
+            self.assertFalse(result["notified"])
+            self.assertFalse(notifications)
+            self.assertEqual(
+                result["notification_delivery"],
+                {"status": "skipped", "reason": "routine_ok_silent"},
+            )
             self.assertGreaterEqual(events.summary()["count"], 1)
+
+            # 但真正紧急的事件（此处为探针崩溃）必须仍然触发高优先级告警
+            def boom():
+                raise RuntimeError("probe crashed")
+
+            emergency = ResidentScheduler(
+                state=state,
+                events=EventStore(Path(folder.name) / "emergency.jsonl"),
+                health_check=boom,
+                notifier=lambda text, **kwargs: notifications.append((text, kwargs)) or True,
+                interval_seconds=0.02,
+            )
+            emergency.run_once()
+            self.assertTrue(notifications)
             self.assertTrue(scheduler.stop()["stopped"])
         finally:
             folder.cleanup()

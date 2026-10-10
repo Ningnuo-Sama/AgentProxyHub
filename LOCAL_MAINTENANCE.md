@@ -194,6 +194,16 @@
   4. 修复异常吞没伪装：修复 `mcp/server.py` 探针异常时返回 `status: ok` 的 Bug，改回 `status: warning` 真实暴露异常。
   5. 历史状态清洗与现场验收：清洗 `data/confidence_state.json` 中 27 个死循环残留的假性 vetoed 端口；双目录（`D:\Program Files\AgentProxyHub` 与 `D:\GitHub\AgentProxyHub`）完全同步；现役 29 个端口全量实测 S/A 级健康存活，实测 `--once` 换绑为 0、微信通知为 0（`notified: false`）。代码与运行态正式冻结为稳定基线。
 
+- 2026-10-10 澳门送中事故根治（锁区红线补全）：
+  1. **事故现象**：Antigravity Tools 账号 `vxjsjxyxsnvxuxnz75@gmail.com`（EVA-03，绑定 `127.0.0.1:21015`）的 Gemini 持续 `400 FAILED_PRECONDITION: User location is not supported for the API use.`（15:08:11 / 15:10:06）。根因不是端口断开，而是当天 11:47 的自治自愈把 `21015/21017/21022/21054/21063/22007` 六个端口集体“治愈”到了 `fw-21025`（上游真名即「澳门-专线节点-vip-免广告」），并把 `verified_country=Macao` 判定为合格出口。
+  2. **判定缺陷**：`core/confidence_engine.py` 与 `core/hot_swap_executor.py` 的送中判定只比较 `google_country == "china"`，**漏掉 Macao / Hong Kong**（而 `core/auto_guard.py` 早已把港澳列入，三处不一致）。后果是自愈把端口钉死在澳门出口，且此后每 5 分钟巡检持续上报 `vetoed_ports=[]` / `status=ok`，形成“系统毫无反应”的假象。
+  3. **二级缺陷**：`baselineCountry` 会被锁区出口污染（被写成 `MACAO` 后，自愈反而把澳门当“同国”首选候选）。
+  4. **代码修复**：新增 `core/blocked_regions.py` 作为锁区判定的**单一事实来源**（China / Hong Kong / Macao / Macau），并接入 `confidence_engine.py`（合规分、一票否决、`bound` 端口选取、基线国写入保护）与 `hot_swap_executor.py`（候选过滤、post_probe 校验、自愈触发）。此后禁止再散落 `== "china"` 字面量比较。
+  5. **数据修复**（业务端口号全部未变，符合“只换底层节点、不换业务端口”解耦契约）：`21015→fw-21027`(马来西亚)、`21017→fw-21050`(哥伦比亚)、`21022→xc-22015`(泰国)、`21025→fw-21027`(马来西亚)、`21031→xc-22022`(德国)、`21054→fw-21052`(澳大利亚)、`21063→fw-21028`(德国)、`22007→xc-22018`(印度)。8 次换绑均落 `repair_events.jsonl` 并逐个备份 `config.yaml`。
+  6. **运维修复**：现场存在两个重复的 `resident_scheduler.py` 守护进程且跑旧逻辑，已用 `resident-daemon-start.vbs` 拉起单一实例（Python Manager shim 的父子两进程属正常，非重复实例）。
+  7. **实机验收**：临时固定 `preferred_account` 到 EVA-03，实测 `gemini-3.8-flash-tiered` 返回 **HTTP 200（6.8s）**，随后已恢复轮询（`preferred_account=null`）；`request_logs` 显示同一账号 `a7o0rps@gmail.com` 由 15:14–15:17 的 400 转为 15:29 的 200，15:23 之后再无任何 400；守护进程连续两轮巡检 `status=ok / vetoed_ports=[]`；现役 30 端口池全量实测 **0 锁区**。
+  8. **遗留与边界**：蜂窝/星辰上游存在网关塌缩，多个“不同国家”节点会随机回落到同一台澳门机 `208.75.135.104` 与印尼机 `168.110.203.177`，修复后依赖新的送中判定在 5 分钟巡检内自动纠偏；`mcp/server.py` 进程仍加载旧代码，需重启 Agent 客户端才生效；Antigravity Tools `gui_config.json` 的 `proxy_pool` 中文标签与实际上游不符（如 `21030` 标德国实为菲律宾/印尼、`21054` 标澳大利亚实为尼日利亚、`21036` 标西班牙实为印尼），属标签治理待办，本次刻意未改动该文件（规避其“禁止 `ConvertTo-Json` 回写”的编码红线）。
+
 ## 回滚点
 
 | 时间 | 仓库 | 提交 |
@@ -201,5 +211,7 @@
 | 2026-09-29 迁移前 | FengWoBridge | `local/custom` `193f000` |
 | 2026-09-29 迁移前 | AgentProxyHub | `main` `12b15b8` |
 | 2026-09-29 迁移完成 | AgentProxyHub | `main` `de5081e` |
+| 2026-10-09 稳定基线 v2.0 | AgentProxyHub | `main` `ecbab50` |
+| 2026-10-10 送中修复前 | AgentProxyHub | `main` `ecbab50` |
 
 运行数据回滚：`D:\Program Files\FengWoBridge\backups\20260929-134805-pre-agentproxyhub-migration`（迁移前）与 `D:\Program Files\FengWoBridge\backups\20260929-final-pre-retirement`（退役前全量快照）。回滚方式：停掉本项目 mihomo → 恢复蜂窝目录（未动过则直接 `启动桥接.bat`）→ 把自启快捷方式换回 `蜂窝出口桥接.lnk`。

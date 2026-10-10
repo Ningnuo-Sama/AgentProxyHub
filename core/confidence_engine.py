@@ -31,6 +31,11 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+try:  # 包内导入（MCP / 调度器调用路径）
+    from .blocked_regions import is_blocked_google_country
+except ImportError:  # 允许以脚本方式直接运行
+    from blocked_regions import is_blocked_google_country
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("APHUB_DATA_DIR") or os.path.join(ROOT, "data")
 NODES_FILE = os.path.join(DATA_DIR, "nodes.json")
@@ -171,7 +176,7 @@ def compliance_score(node: Optional[Dict[str, Any]]) -> float:
     """大区合规（30%）：直接采用静态测绘结论（Google 判定国 + Flow 支持 + 送中标记）。"""
     if not node:
         return 30.0   # 无测绘数据，给保守底分
-    if node.get("isSentToChina"):
+    if node.get("isSentToChina") or is_blocked_google_country(node.get("googleCountry")):
         return 0.0
     if node.get("flowSupported"):
         return 100.0
@@ -317,11 +322,16 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
                 rec["driftPenalty"] = 0
             # unknown 只记录证据，不触发跨洲禁用，也不改变有效国家基线。
             if drift != "unknown":
-                rec["baselineIp"] = current_ip
-                rec["baselineCountry"] = effective_cc or baseline_cc
-                if google_country not in ("", "FAIL", "UNKNOWN"):
+                candidate_cc = effective_cc or baseline_cc
+                # 锁区国家（中国／香港／澳门）绝不允许被固化为基线国：
+                # 否则自愈会把澳门当成“同国”候选，持续把端口钉死在受限出口上。
+                if not is_blocked_google_country(candidate_cc):
+                    rec["baselineIp"] = current_ip
+                    rec["baselineCountry"] = candidate_cc
+                if (google_country not in ("", "FAIL", "UNKNOWN")
+                        and not is_blocked_google_country(google_country)):
                     rec["baselineGoogleCountry"] = google_country
-                if physical_country:
+                if physical_country and not is_blocked_google_country(physical_country):
                     rec["baselinePhysicalCountry"] = physical_country
         else:
             # 出口回归基线，遗留扣分随稳定时长线性衰减（48h 清零）
@@ -330,7 +340,9 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
             rec["driftPenalty"] = max(0.0, p0 * (1 - hours / 48.0)) if p0 else 0.0
 
     # ---- 计算总分 ----
-    sent_to_china = bool(node and node.get("isSentToChina")) or (str(google_country).strip().lower() == "china")
+    sent_to_china = (bool(node and node.get("isSentToChina"))
+                     or is_blocked_google_country(google_country)
+                     or is_blocked_google_country((node or {}).get("googleCountry")))
     vetoed = bool(rec.get("offline")) or sent_to_china
     ban_left = hours_since(rec.get("vetoUntil")) or 0.0
     if rec.get("vetoUntil") and ban_left < 0:
@@ -366,7 +378,9 @@ def select_ports(scope: str, explicit: List[int]) -> List[int]:
     except Exception:
         pass
     for p, n in nodes.items():
-        if n.get("healthRating") in ("S", "A") and not n.get("isSentToChina"):
+        if (n.get("healthRating") in ("S", "A")
+                and not n.get("isSentToChina")
+                and not is_blocked_google_country(n.get("googleCountry"))):
             ports.add(p)
     return sorted(ports)
 
