@@ -15,8 +15,12 @@ import socket
 from typing import Dict, Any, List, Optional
 
 def test_socks5_target(host: str, port: int, target_url: str, timeout: float = 6.0) -> Dict[str, Any]:
-    """通过本地代理端口探测目标 URL 的连通状态"""
-    proxy_url = f"socks5h://{host}:{port}"
+    """通过本地代理端口真实请求目标 URL 的连通状态。
+
+    历史缺陷（2026-10-12 体检修复）：旧实现只对本地端口做 TCP 握手就返回
+    reachable=True / status_code=200，任何监听端口（哪怕内核死了代理不通）
+    都会被报成"目标可达"，场景打标基于假阳性。
+    """
     result = {
         "url": target_url,
         "reachable": False,
@@ -24,27 +28,24 @@ def test_socks5_target(host: str, port: int, target_url: str, timeout: float = 6
         "latency_ms": -1,
         "error": None
     }
-    
-    t0 = time.time()
     try:
-        # 使用 urllib + socks 处理器 (若环境无 socks 模块则退化为标准 http 探测)
-        import urllib.request
-        # 尝试标准 HTTP CONNECT (针对我们配套的 HTTP 端口) 或 socks
-        req = urllib.request.Request(
-            target_url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-            }
-        )
-        # 为兼容性，使用 socket 直接打桩测试握手延迟
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect((host, port))
-        s.close()
-        
+        from urllib.parse import urlparse
+        parsed = urlparse(target_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            result["error"] = f"unsupported_target: {target_url}"
+            return result
+        t0 = time.time()
+        try:
+            from .net_probe import https_get_via_socks5
+        except ImportError:
+            from net_probe import https_get_via_socks5
+        status_code, body = https_get_via_socks5(
+            int(port), parsed.hostname, parsed.path or "/", timeout=timeout)
         result["latency_ms"] = int((time.time() - t0) * 1000)
-        result["reachable"] = True
-        result["status_code"] = 200
+        result["status_code"] = status_code
+        result["reachable"] = 200 <= status_code < 400
+        if not result["reachable"]:
+            result["error"] = f"http_status_{status_code}" if status_code else "probe_failed"
     except Exception as e:
         result["error"] = str(e)
     return result

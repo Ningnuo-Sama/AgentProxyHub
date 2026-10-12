@@ -223,6 +223,8 @@ foreach ($n in $fwNodes) {
         ServerPort = $n.Port
         OrigName   = $n.OrigName
     })
+    # 红线断言：蜂窝段 21001-21080，越段即中止（防止侵入星辰段并破坏端口粘性）
+    if ($port -gt 21080) { throw "蜂窝节点数超过 80，端口将越出 21001-21080 红线段，拒绝生成（请裁剪节点）" }
     $port++
 }
 
@@ -266,6 +268,8 @@ foreach ($n in $xcNodes) {
         ServerPort = $n.Port
         OrigName   = $n.OrigName
     })
+    # 红线断言：星辰段 22001-22045
+    if ($xcPort -gt 22045) { throw "星辰节点数超过 45，端口将越出 22001-22045 红线段，拒绝生成（请裁剪节点）" }
     $xcPort++
 }
 

@@ -28,6 +28,14 @@ import json
 import os
 import subprocess
 import sys
+
+def _get_hidden_startupinfo():
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        return si
+    return None
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -77,30 +85,33 @@ def hours_since(iso: Optional[str]) -> Optional[float]:
         return None
     try:
         t = dt.datetime.fromisoformat(iso)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=dt.timezone.utc)
         return (dt.datetime.now(dt.timezone.utc) - t).total_seconds() / 3600.0
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 # ---------------------------------------------------------------- 探测
 
 def probe_google_country(port: int, timeout: float = 8.0) -> str:
-    """通过代理读取 Google 自己的 Country version；这是账号风控相关的首要国家信号。"""
-    cmd = ["curl.exe", "-s", "--max-time", str(int(timeout)),
-           "-x", f"socks5h://127.0.0.1:{port}",
-           "https://policies.google.com/terms"]
+    """通过代理读取 Google 自己的 Country version；这是账号风控相关的首要国家信号。
+
+    黑窗根因治理 (2026-10-12)：不再调用 curl.exe 子进程，改由 core.net_probe 在进程内
+    直接走 SOCKS5+TLS 请求。subprocess 拉起 curl.exe 会派生控制台窗口（本机默认控制台
+    宿主为 Windows Terminal 时即为可见黑窗），此处从物理上根除。
+    """
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace",
-                            creationflags=0x08000000, timeout=timeout + 3)
-        body = cp.stdout or ""
-        import re
-        m = re.search(r"Country version:</a>\s*([^<]+)", body, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-        if "policies.google.com" in body:
-            return "Unknown"
-    except Exception:
-        pass
+        from core.net_probe import probe_google_country_direct
+    except ImportError:
+        try:
+            from net_probe import probe_google_country_direct
+        except ImportError:
+            probe_google_country_direct = None
+    if probe_google_country_direct is not None:
+        try:
+            return probe_google_country_direct(port, timeout) or "FAIL"
+        except Exception:
+            return "FAIL"
     return "FAIL"
 
 
@@ -109,49 +120,37 @@ def probe_port(port: int, timeout: float = 10.0) -> Dict[str, Any]:
 
     Google 自判国家用于账号身份决策；ipwho/api-ipify 只作为物理网络与漂移辅助。
     返回 {"ok", "ip", "country", "google_country", "latency_ms", "error"}。
-    """
-    def _curl(url: str) -> Tuple[int, str]:
-        cmd = ["curl.exe", "-s", "--max-time", str(int(timeout)),
-               "-x", f"socks5h://127.0.0.1:{port}",
-               "-w", "\n%{time_total}", url]
-        try:
-            cp = subprocess.run(cmd, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace",
-                                creationflags=0x08000000, timeout=timeout + 5)
-            return cp.returncode, cp.stdout.strip()
-        except Exception:
-            return 1, ""
 
-    rc, body = _curl("https://ipwho.is/")
-    if rc == 0 and body:
-        lines = body.rsplit("\n", 1)
-        try:
-            latency_ms = int(float(lines[1]) * 1000)
-        except (IndexError, ValueError):
-            latency_ms = -1
-        try:
-            info = json.loads(lines[0])
-            ip = info.get("ip") or ""
-            cc = info.get("country_code") or ""
-            if ip:
-                return {"ok": True, "ip": ip, "country": cc.upper(),
-                        "google_country": probe_google_country(port, timeout),
-                        "latency_ms": latency_ms}
-        except (json.JSONDecodeError, IndexError):
-            pass
+    2026-10-12：全程零子进程（纯 Python SOCKS5+TLS），杜绝 curl.exe → 黑窗。
+    """
+    try:
+        from core.net_probe import probe_ip_direct, https_get_via_socks5
+    except ImportError:
+        from net_probe import probe_ip_direct, https_get_via_socks5
+
+    google_country = probe_google_country(port, timeout)
+
+    try:
+        status, ip, cc, latency_ms = probe_ip_direct(port, timeout + 2)
+    except Exception:
+        status, ip, cc, latency_ms = 0, "", "", -1
+    if status == 200 and ip:
+        return {"ok": True, "ip": ip, "country": cc,
+                "google_country": google_country, "latency_ms": latency_ms}
+
     # 退路：只拿 IP（国家码留空，漂移分级延后到有国码时判定）
-    rc, body = _curl("https://api.ipify.org")
-    if rc == 0 and body and "\n" in body:
-        lines = body.rsplit("\n", 1)
-        try:
-            latency_ms = int(float(lines[1]) * 1000)
-        except (IndexError, ValueError):
-            latency_ms = -1
-        ip = lines[0].strip()
-        if ip and len(ip) <= 45:
-            return {"ok": True, "ip": ip, "country": "",
-                    "google_country": probe_google_country(port, timeout),
-                    "latency_ms": latency_ms}
+    import time as _time
+    t0 = _time.monotonic()
+    try:
+        st2, body2 = https_get_via_socks5(port, "api.ipify.org", "/", timeout)
+    except Exception:
+        st2, body2 = 0, b""
+    if st2 == 200 and body2:
+        ip2 = body2.decode("utf-8", errors="replace").strip()
+        if ip2 and len(ip2) <= 45:
+            return {"ok": True, "ip": ip2, "country": "",
+                    "google_country": google_country,
+                    "latency_ms": int((_time.monotonic() - t0) * 1000)}
     return {"ok": False, "ip": "", "country": "", "latency_ms": -1, "error": "probe_failed"}
 
 # ---------------------------------------------------------------- 打分
@@ -428,6 +427,10 @@ def run(scope: str, explicit: List[int], max_workers: int = 8, auto_heal: bool =
             if p in protect_ports:
                 rec = state["ports"].get(str(p), {})
                 if rec.get("vetoed") and rec.get("vetoReason") in ("sent_to_china", "offline"):
+                    # 防震荡冷却：与 scan_and_heal_all 同样的 1 小时门禁，避免失败端口被巡检反复换绑横跳
+                    last_healed = float(rec.get("lastHealedTime") or 0.0)
+                    if time.time() - last_healed < 3600.0:
+                        continue
                     print(f"[confidence-heal] 发现保护端口 {p} 被否决 ({rec.get('vetoReason')})，正在触发自动热替换自愈...")
                     try:
                         from .hot_swap_executor import auto_heal_port

@@ -23,12 +23,14 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:  # 包内导入（MCP / 调度器调用路径）
     from .blocked_regions import is_blocked_google_country
+    from .process_control_lock import process_control_lock
 except ImportError:  # 允许以脚本方式直接运行
     from blocked_regions import is_blocked_google_country
+    from process_control_lock import process_control_lock
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
@@ -63,6 +65,36 @@ def get_region(country_code: str) -> str:
     return REGION_MAP.get(str(country_code).upper().strip(), "UNKNOWN")
 
 
+# 国家全名 / 别名 → ISO 2 码归一化表。
+# confidence_state.json 的 baselineCountry 历史上存的是全名（如 "UNITED STATES"），
+# 而 lastProbe.country 存 ISO 码（如 "US"），直接比较永远不相等，
+# 曾导致同国/同大区优先与跨大区拦截整体失效（2026-10-12 体检修复）。
+_COUNTRY_NAME_TO_ISO = {
+    "UNITED STATES": "US", "USA": "US", "U.S.": "US", "AMERICA": "US",
+    "UNITED KINGDOM": "GB", "UK": "GB", "ENGLAND": "GB",
+    "SOUTH KOREA": "KR", "KOREA": "KR", "REPUBLIC OF KOREA": "KR",
+    "TAIWAN": "TW", "TAIWAN, PROVINCE OF CHINA": "TW",
+    "HONG KONG": "HK", "MACAO": "MO", "MACAU": "MO",
+    "INDONESIA": "ID", "MALAYSIA": "MY", "SINGAPORE": "SG", "THAILAND": "TH",
+    "VIETNAM": "VN", "PHILIPPINES": "PH",
+    "GERMANY": "DE", "FRANCE": "FR", "ITALY": "IT", "SPAIN": "ES",
+    "NETHERLANDS": "NL", "SWITZERLAND": "CH", "DENMARK": "DK", "ROMANIA": "RO",
+    "JAPAN": "JP", "CANADA": "CA", "MEXICO": "MX",
+    "AUSTRALIA": "AU", "NEW ZEALAND": "NZ",
+    "UKRAINE": "UA", "RUSSIA": "RU", "INDIA": "IN", "BRAZIL": "BR",
+    "COLOMBIA": "CO", "NIGERIA": "NG", "TURKEY": "TR", "ARGENTINA": "AR",
+    "CHINA": "CN", "MAINLAND CHINA": "CN",
+}
+
+
+def normalize_cc(value: Any) -> str:
+    """把国家字段（ISO 码或英文全名）归一化为 ISO 2 码，未知返回原值大写。"""
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    return _COUNTRY_NAME_TO_ISO.get(text, text)
+
+
 def read_controller_secret() -> str:
     """从 config.yaml 解析 controller secret。"""
     try:
@@ -93,26 +125,23 @@ def call_mihomo_api(endpoint: str, method: str = "GET", body: Optional[dict] = N
 
 
 def probe_google_country(port: int, timeout: float = 6.0) -> str:
-    """通过本地 SOCKS5 端口实测 Google Terms Country version。"""
-    cmd = [
-        "curl.exe", "-s", "-L", "--max-time", str(int(timeout)),
-        "--socks5-hostname", f"127.0.0.1:{port}",
-        "https://policies.google.com/terms"
-    ]
+    """通过本地 SOCKS5 端口实测 Google Terms Country version（纯 Python，零黑窗）。
+
+    黑窗根因治理 (2026-10-12)：原实现用 subprocess 拉起 curl.exe，会派生控制台窗口；
+    本机默认控制台宿主为 Windows Terminal 时即为可见黑窗。现改为 core.net_probe
+    进程内 SOCKS5+TLS 直连，物理上不产生任何子进程。
+    """
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 3, creationflags=0x08000000)
-        body = cp.stdout or ""
-        m = re.search(r"Country version:</a>\s*([^<]+)", body, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-        m2 = re.search(r"country-version.*?([A-Za-z ]+)</p>", body, re.IGNORECASE)
-        if m2:
-            return m2.group(1).strip()
-        if "policies.google.com" in body:
-            return "Unknown"
+        from core.net_probe import probe_google_country_direct
+    except ImportError:
+        try:
+            from net_probe import probe_google_country_direct
+        except ImportError:
+            return "FAIL"
+    try:
+        return probe_google_country_direct(port, timeout) or "FAIL"
     except Exception:
-        pass
-    return "FAIL"
+        return "FAIL"
 
 
 def send_local_notification(text: str, emote: str = "work", motion: str = "wiggle") -> bool:
@@ -170,9 +199,10 @@ def select_candidate_node(port: int, current_proxy: Optional[str] = None) -> Dic
         except Exception:
             pass
 
-    # 确定目标端口的历史基线大区与国家
+    # 确定目标端口的历史基线大区与国家（基线可能是全名，统一归一化为 ISO 码）
     port_rec = confidence_data.get(str(port), {})
-    baseline_cc = port_rec.get("baselineCountry") or (port_rec.get("lastProbe") or {}).get("country") or ""
+    baseline_cc = normalize_cc(port_rec.get("baselineCountry")
+                               or (port_rec.get("lastProbe") or {}).get("country") or "")
     baseline_region = get_region(baseline_cc)
 
     # 从 Mihomo 获取所有现役 proxies
@@ -209,7 +239,10 @@ def select_candidate_node(port: int, current_proxy: Optional[str] = None) -> Dic
         if is_blocked_google_country(g_country):
             continue
 
-        cand_cc = last_probe.get("country") or c_rec.get("baselineCountry") or ""
+        cand_cc = normalize_cc(last_probe.get("country") or c_rec.get("baselineCountry") or "")
+        # 从未测绘、无任何国家记录的节点不进入候选（避免盲选未知出口）
+        if not cand_cc and not g_country:
+            continue
         cand_region = get_region(cand_cc)
 
         score = float(c_rec.get("score") or 0.0)
@@ -265,6 +298,14 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
     if not CONFIG_PATH.exists():
         return {"ok": False, "error": f"config_not_found: {CONFIG_PATH}"}
 
+    # 跨进程锁：CLI --scan 与常驻 scheduler 可能同时触发换绑，
+    # 并发读改写同一 config.yaml 会互相覆盖甚至写坏配置。
+    with process_control_lock():
+        return _hot_swap_port_node_locked(port, new_proxy_name, reason=reason)
+
+
+def _hot_swap_port_node_locked(port: int, new_proxy_name: str, reason: str = "autonomous_healing") -> Dict[str, Any]:
+    """在已持有控制锁的前提下执行热替换（勿直接调用，入口是 hot_swap_port_node）。"""
     # 1. 备份配置
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -289,8 +330,8 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
     if not modified:
         return {"ok": False, "port": port, "error": f"port_{port}_listeners_not_found_in_config"}
 
-    # 原子写入新配置
-    temp_path = CONFIG_PATH.with_suffix(".tmp")
+    # 原子写入新配置（唯一临时名，防并发覆盖）
+    temp_path = CONFIG_PATH.with_suffix(f".tmp-{os.getpid()}-{int(time.time()*1000)}")
     temp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     temp_path.replace(CONFIG_PATH)
 
@@ -308,7 +349,25 @@ def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous
     if is_blocked_google_country(verified_country) or verified_country == "FAIL":
         # 换上去依然送中或断网，立即回滚
         shutil.copy2(backup_file, CONFIG_PATH)
-        call_mihomo_api("configs?force=true", method="PUT", body={"path": str(CONFIG_PATH.resolve())})
+        try:
+            call_mihomo_api("configs?force=true", method="PUT", body={"path": str(CONFIG_PATH.resolve())})
+        except Exception as rollback_exc:
+            # 回滚重载失败必须显式暴露：磁盘已是旧配置但内核可能仍跑新配置
+            append_repair_event("rollback_reload_failed", {
+                "port": port,
+                "tried_proxy": new_proxy_name,
+                "old_proxy": old_proxy,
+                "reason": reason,
+                "verified_country": verified_country,
+                "rollback_error": str(rollback_exc),
+            }, severity="critical")
+            return {
+                "ok": False,
+                "port": port,
+                "error": f"rollback_reload_failed: {rollback_exc}",
+                "rolled_back": True,
+                "manual_intervention_required": True,
+            }
         append_repair_event("heal_failed_rollback", {
             "port": port,
             "tried_proxy": new_proxy_name,

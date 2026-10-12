@@ -206,10 +206,12 @@ def main():
     args = parser.parse_args()
 
     state = AutonomyState()
-    # 确保主开关开启
+    # 总开关必须由用户显式开启（MCP set_switches 或 control_cli）。
+    # 此处不再代用户打开：历史实现强制 set(enabled=True)，用户手动关闭后
+    # 跑一次 --status/--once 就被静默重新启用。
     switches = state.load().get("switches", {})
-    if not switches.get("enabled"):
-        state.set(enabled=True)
+    if not switches.get("enabled") and args.daemon:
+        print("[scheduler] 警告：autonomy 总开关当前为关闭（enabled=false），本轮以只读/巡检模式运行但不会自愈。")
 
     notifier = None if args.no_notify else default_live_notifier
     scheduler = ResidentScheduler(

@@ -631,7 +631,14 @@ def tool_audit_confidence(args: Dict[str, Any]) -> Any:
         return {"ok": False, "error": f"快照读取失败: {e}"}
 
     ports = state.get("ports", {})
-    min_score = args.get("min_score")
+    try:
+        min_score = float(args["min_score"]) if args.get("min_score") is not None else None
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "min_score 必须是数字"}
+    try:
+        result_limit = max(1, min(200, int(args.get("limit", 20))))
+    except (TypeError, ValueError):
+        result_limit = 20
     only_vetoed = bool(args.get("only_vetoed"))
 
     items = []
@@ -659,7 +666,7 @@ def tool_audit_confidence(args: Dict[str, Any]) -> Any:
         "total": len(items),
         "scoring": "物理稳定性40% + 大区合规30% + 协议健康30%；送中/离线/洲际漂移7天内一票否决",
         "note": "高分节点仅作为备选推荐，禁止据此强切老号绑定",
-        "ports": items[: int(args.get("limit", 20))],
+        "ports": items[:result_limit],
     }
 
 
@@ -973,7 +980,11 @@ def tool_autonomy_action(args: Dict[str, Any]) -> Dict[str, Any]:
             switches = args.get("switches")
             if not isinstance(switches, dict):
                 return {"ok": False, "code": "invalid_switches"}
-            result = state.set(**{str(k): bool(v) for k, v in switches.items()})
+            try:
+                result = state.set(**{str(k): bool(v) for k, v in switches.items()})
+            except ValueError as exc:
+                # 白名单校验：未知开关直接报错，不污染状态文件
+                return {"ok": False, "code": "unknown_switch", "error": str(exc)}
             if not result["switches"].get("enabled"):
                 _get_resident_scheduler().stop()
             return {"ok": True, "action": action, "state": result,
@@ -1047,7 +1058,7 @@ def tool_kernel_recovery(args: Dict[str, Any]) -> Dict[str, Any]:
     from core.resident_engineer import ResidentEngineer
     # 默认指向与源码仓库同级部署的正式运行副本；找不到时回退源码仓库自身 runner。
     from pathlib import Path as _P
-    default_runner = _P(ROOT_DIR).parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"
+    default_runner = _P("D:/Program Files") / "AgentProxyHub" / "silent-run.bat"
     if not default_runner.exists():
         default_runner = _P(ROOT_DIR) / "silent-run.bat"
     runner = args.get("runner") or str(default_runner)
@@ -1613,6 +1624,14 @@ TOOLS = [
 # ==============================================================================
 
 def main():
+    # stdio 编码防护：宿主以 GBK 等 codepage 拉起时，含中文的工具名/参数会在
+    # 读取或回写时抛 UnicodeEncodeError 使整个 MCP 进程崩溃（2026-10-11 实测踩坑）。
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     while True:
         line = sys.stdin.readline()
         if not line:

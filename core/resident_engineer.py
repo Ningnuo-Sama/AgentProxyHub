@@ -142,11 +142,16 @@ class ResidentEngineer:
                     "paid_calls": False, "bindings_changed": False}
         try:
             from core.kernel_control import OWNED_EXE
+            # 黑窗治理 (2026-10-12)：全部子进程强制无窗口
+            _si = subprocess.STARTUPINFO()
+            _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            _si.wShowWindow = 0
+            _hidden = {"startupinfo": _si, "creationflags": 0x08000000}
             # 恢复前禁止任意runner拉起第二个内核；runner必须是已知APH入口。
             existing = subprocess.run(
-                ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
                  "@(Get-CimInstance Win32_Process -Filter \"Name='mihomo.exe'\" | Where-Object {$_.ExecutablePath -eq '" + OWNED_EXE + "'}).Count"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, timeout=5, **_hidden)
             if existing.returncode == 0 and existing.stdout.strip() not in ('', '0'):
                 return {"ok": False, "code": "owned_kernel_already_running", "recoverable": False,
                         "before": before, "after": before}
@@ -154,8 +159,7 @@ class ResidentEngineer:
                 return {"ok": False, "code": "runner_not_allowlisted", "recoverable": False}
             if is_halted():
                 return {"ok": False, "code": "manual_halt", "recoverable": False}
-            subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent),
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen([str(runner_path)], cwd=str(runner_path.parent), **_hidden)
         except OSError as exc:
             return {"ok": False, "code": "runner_start_failed", "error": str(exc)[:160],
                     "before": before, "recoverable": True}
@@ -215,7 +219,7 @@ class ResidentEngineer:
                 result = self.health_check(args.get("ports"), host=str(args.get("host", "127.0.0.1")))
             elif action == "recover_mihomo":
                 result = self.recover_mihomo(
-                    runner=str(args.get("runner") or ROOT_DIR.parent / "Program Files" / "AgentProxyHub" / "silent-run.bat"),
+                    runner=str(args.get("runner") or Path(ROOT_DIR.anchor) / "Program Files" / "AgentProxyHub" / "silent-run.bat"),
                     wait_seconds=float(args.get("wait_seconds", 12)),
                     ports=args.get("ports") or [21001, 21008, 22002, 39999, 21909],
                 )

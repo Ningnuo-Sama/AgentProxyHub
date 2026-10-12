@@ -176,9 +176,18 @@ class RoutePolicy:
     def route(self, candidates: Iterable[Mapping[str, Any]], *, country: str = "", region: str = "") -> dict[str, Any]:
         if not self.state.load()["switches"]["routing_enabled"]:
             return {"ok": False, "reason": "routing_disabled", "candidate": None}
+        try:
+            from .blocked_regions import is_blocked_google_country
+        except ImportError:
+            from blocked_regions import is_blocked_google_country
         wanted = country.upper().strip()
         wanted_region = str(region or self.region(wanted)).upper()
-        available = [dict(c) for c in candidates if c.get("port") and not c.get("vetoed") and c.get("health", "UNKNOWN") not in {"DOWN", "FAIL"}]
+        # 锁区红线：Google 判定国命中锁区（或显式标记送中）的候选永不参与路由
+        available = [dict(c) for c in candidates
+                     if c.get("port") and not c.get("vetoed")
+                     and not c.get("isSentToChina")
+                     and not is_blocked_google_country(c.get("googleCountry") or c.get("google_country") or c.get("country"))
+                     and c.get("health", "UNKNOWN") not in {"DOWN", "FAIL"}]
         def cc(item: Mapping[str, Any]) -> str:
             return str(item.get("country") or item.get("countryCode") or "").upper().strip()
         same_country = [c for c in available if wanted and cc(c) == wanted]

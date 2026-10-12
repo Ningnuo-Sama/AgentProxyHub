@@ -12,7 +12,7 @@
 Flow / CloakMulti 侧不自动改写（那边有门禁与体检），只报出需要人工确认的清单。
 """
 from __future__ import annotations
-import argparse, glob, json, os, subprocess, sys, time
+import argparse, glob, json, os, shutil, subprocess, sys, time, urllib.request, urllib.error
 
 ROOT = r"D:\GitHub\AgentProxyHub"
 sys.path.insert(0, ROOT)
@@ -24,9 +24,20 @@ STATE = os.path.join(ROOT, "data", "account_guard_state.json")
 CAND_PORTS = [p for p in range(21001, 21081)] + [p for p in range(22001, 22046)]
 
 
+def _hidden_si():
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        return si
+    return None
+
+
 def sh(cmd, timeout=30):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              startupinfo=_hidden_si(),
+                              creationflags=0x08000000 if sys.platform == "win32" else 0).stdout
     except Exception:
         return ""
 
@@ -36,9 +47,16 @@ def at_key() -> str:
 
 
 def at_config(key: str) -> dict:
-    raw = sh(["curl.exe", "-s", "--max-time", "20", "-H", f"Authorization: Bearer {key}",
-              "http://127.0.0.1:8045/api/config"])
-    return json.loads(raw)
+    req = urllib.request.Request("http://127.0.0.1:8045/api/config",
+                                 headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        # 兼容备用
+        raw = sh(["curl.exe", "-s", "--max-time", "20", "-H", f"Authorization: Bearer {key}",
+                  "http://127.0.0.1:8045/api/config"])
+        return json.loads(raw) if raw else {}
 
 
 def at_accounts() -> dict:
@@ -77,8 +95,12 @@ def main() -> int:
 
     key = at_key()
     cfg = at_config(key)
-    pool = cfg["proxy"]["proxy_pool"]
-    url_of = {p["id"]: p["url"] for p in pool["proxies"]}
+    pool = (cfg.get("proxy") or {}).get("proxy_pool") or {}
+    proxies = pool.get("proxies") or []
+    if not proxies:
+        print("[account-guard] 无法读取 Antigravity 配置（gui_config.json 缺失或解析失败），跳过本轮检查")
+        return 2
+    url_of = {p["id"]: p["url"] for p in proxies}
     port_of = {pid: int(u.rsplit(":", 1)[1]) for pid, u in url_of.items() if u.startswith("socks5h://")}
     at_map = {}
     for aid, pid in (pool.get("account_bindings") or {}).items():
@@ -183,25 +205,34 @@ def main() -> int:
         if pid is None:
             pid = __import__("uuid").uuid4().hex
             pool["proxies"].append({"id": pid, "name": f"APH-美国专线-{cand}", "url": f"socks5h://127.0.0.1:{cand}",
-                                    "auth": None, "enabled": True, "priority": 0, "tags": ["gemini-pure"],
-                                    "max_accounts": None, "health_check_url": None,
-                                    "last_check_time": int(time.time()), "is_healthy": True, "latency": None})
+                                    "auth": "", "enabled": True, "priority": 0, "tags": ["gemini-pure"],
+                                    "max_accounts": 1, "health_check_url": "",
+                                    "last_check_time": int(time.time()), "is_healthy": True, "latency": 0})
         for aid, email in targets:
             pool["account_bindings"][aid] = pid
             fixed.append(f"{email}: {p['port']}({p['google']}) -> {cand}")
         used.add(cand)
     if fixed:
         backup = os.path.join(AT_BASE, f"gui_config.json.bak-guard-{time.strftime('%Y%m%d-%H%M')}")
-        subprocess.run(["cmd", "/c", "copy", "/y", os.path.join(AT_BASE, "gui_config.json"), backup],
-                       capture_output=True)
-        body = json.dumps({"config": cfg}, ensure_ascii=False)
-        open(os.path.join(ROOT, "data", ".guard_post.json"), "w", encoding="utf-8").write(body)
-        r = subprocess.run(["curl.exe", "-s", "-o", "NUL", "-w", "%{http_code}", "-X", "POST",
-                            "-H", f"Authorization: Bearer {key}", "-H", "Content-Type: application/json",
-                            "--data-binary", "@" + os.path.join(ROOT, "data", ".guard_post.json"),
-                            "http://127.0.0.1:8045/api/config"], capture_output=True, text=True, timeout=40)
-        os.remove(os.path.join(ROOT, "data", ".guard_post.json"))
-        msg = f"🔧 已自动换回美国口（HTTP {r.stdout.strip()}）：\n" + "\n".join(fixed)
+        try:
+            shutil.copyfile(os.path.join(AT_BASE, "gui_config.json"), backup)
+        except Exception:
+            pass
+        body_bytes = json.dumps({"config": cfg}, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request("http://127.0.0.1:8045/api/config",
+                                     data=body_bytes,
+                                     headers={"Authorization": f"Bearer {key}",
+                                              "Content-Type": "application/json"},
+                                     method="POST")
+        status_code = 0
+        try:
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                status_code = resp.status
+        except urllib.error.HTTPError as he:
+            status_code = he.code
+        except Exception:
+            status_code = -1
+        msg = f"🔧 已自动换回美国口（HTTP {status_code}）：\n" + "\n".join(fixed)
         print(msg)
         notify_all(msg, event_id=f"acct-guard-fix-{stamp}")
     if skipped:

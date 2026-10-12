@@ -15,9 +15,14 @@ from core.alert_dispatch import notify_all
 
 MIHOMO_CONTROLLER = 'http://127.0.0.1:21909'
 # 认证只读正式运行配置，不把控制密钥写进源码。
-import yaml
-_runtime_config = yaml.safe_load(Path(r'D:\Program Files\AgentProxyHub\config\config.yaml').read_text(encoding='utf-8-sig'))
-MIHOMO_HEADERS = {'Authorization': 'Bearer ' + str(_runtime_config.get('secret', ''))}
+# 配置缺失/被占用时降级为空密钥，不能让整个 EVA 适配层进程直接崩掉。
+MIHOMO_HEADERS = {'Authorization': 'Bearer '}
+try:
+    import yaml
+    _runtime_config = yaml.safe_load(Path(r'D:\Program Files\AgentProxyHub\config\config.yaml').read_text(encoding='utf-8-sig')) or {}
+    MIHOMO_HEADERS = {'Authorization': 'Bearer ' + str(_runtime_config.get('secret', ''))}
+except Exception:
+    _runtime_config = {}
 UPSTREAMS = {
     'flow': 'http://127.0.0.1:8001/health',
     'gemini': 'http://127.0.0.1:8045/health',
@@ -33,7 +38,7 @@ LOG_SOURCES = {
     'hermes_watchdog': Path(r'D:\Program Files (x86)\hermes\logs\gateway-watchdog.log'),
     'usage': Path(r'D:\Program Files\AgentProxyHub\data\model_usage.jsonl'),
     'autonomy': Path(r'D:\Program Files\AgentProxyHub\data\autonomy_events.jsonl'),
-    'antigravity_app': Path(r'C:\Users\1\.antigravity_tools\logs\app.log.2026-10-02'),
+    'antigravity_app': max(Path(r'C:\Users\1\.antigravity_tools\logs').glob('app.log.*'), default=Path(r'C:\Users\1\.antigravity_tools\logs\app.log'), key=lambda p: p.name),
 }
 ANTIGRAVITY_DB = Path(r'C:\Users\1\.antigravity_tools\proxy_logs.db')
 FLOW_TASK_LOG = Path(r'C:\Users\1\AppData\Local\FlowTools\task-logs.json')
@@ -389,11 +394,12 @@ def read_sentry_report():
         r_stat = {'active': True}
     
     bindings_file = Path(os.environ.get('APHUB_DATA_DIR', r'D:\Program Files\AgentProxyHub\data')) / 'bindings.json'
-    b_count = 9
+    b_count = 0
     if bindings_file.exists():
         try:
             with open(bindings_file, 'r', encoding='utf-8') as f:
-                b_count = len(json.load(f).get('bindings', {}))
+                # bindings.json 顶层是扁平 {port: {...}} 映射，没有 'bindings' 键
+                b_count = len(json.load(f))
         except Exception:
             pass
 
@@ -821,6 +827,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
         if path == '/api/route':
             # 个人出海只操作独立内核；保留既有文案语义，不触碰125个业务监听。
+            # 动作只认 start/stop/toggle/status：历史上把结果标签「出海展開中/出海介入」
+            # 当动作令牌，会把状态展示反向映射成动作（停止态点击反而再次 stop）。
             action = str(body.get('action') or body.get('state') or '').lower()
             from core.personal_lifecycle import start, stop, status, toggle
             if action == 'toggle':
@@ -828,14 +836,14 @@ class Handler(BaseHTTPRequestHandler):
                 res = stop() if st.get('active') else start()
                 after = status(force=True)
                 return self.send_json(200, {'ok': True, 'action': 'toggle', 'result': res, 'state': after})
-            if action in {'start', 'on', 'enable', '出海展開中'}:
+            if action in {'start', 'on', 'enable'}:
                 return self.send_json(200, start())
-            if action in {'stop', 'off', 'disable', '出海介入'}:
+            if action in {'stop', 'off', 'disable'}:
                 result = stop()
                 return self.send_json(200, result)
             if action in {'status', 'query', ''}:
                 return self.send_json(200, status())
-            return self.send_json(400, {'ok': False, 'code': 'invalid_route_action', 'allowed': ['start', 'stop', 'status']})
+            return self.send_json(400, {'ok': False, 'code': 'invalid_route_action', 'allowed': ['start', 'stop', 'toggle', 'status']})
         if path == '/api/command':
             command = str(body.get('command') or '').strip().lower()
             if command not in ALLOWED_COMMANDS: return self.send_json(403, {'ok': False, 'code':'command_not_allowed', 'allowed': sorted(ALLOWED_COMMANDS)})
