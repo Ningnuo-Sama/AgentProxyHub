@@ -145,6 +145,25 @@ function Get-NodeCleanName($node) {
     return "$air-$c-$kind$($node.port)"
 }
 
+# 搜索防抖：连续输入只在停顿 300ms 后触发一次重建，避免全量 125 行 UI 每键重刷卡顿
+function Invoke-Debounced([string]$key, [int]$ms, [scriptblock]$action) {
+    if (-not $script:DebounceTimers) { $script:DebounceTimers = @{} }
+    $old = $script:DebounceTimers[$key]
+    if ($old) { $old.Stop(); $old.Tick = $null }
+    $t = New-Object Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds($ms)
+    $t.Add_Tick({
+        param($sender, $args)
+        $sender.Stop()
+        $script:DebounceTimers.Remove($sender.Tag)
+        & $sender.Action
+    })
+    Add-Member -InputObject $t -NotePropertyName Tag -NotePropertyValue $key -Force
+    Add-Member -InputObject $t -NotePropertyName Action -NotePropertyValue $action -Force
+    $script:DebounceTimers[$key] = $t
+    $t.Start()
+}
+
 function Format-ProxyEntry($node, $fmt) {
     $listen = $script:ListenAddr
     $port = $node.port
@@ -1884,13 +1903,20 @@ $BtnGuardFill.Add_Click({
     $script:GuardFillPs = [PowerShell]::Create()
     $null = $script:GuardFillPs.AddScript({
         param($sp)
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sp -Mode RefreshStandby 2>&1
+        # wscript 静默包装：GUI 宿主下直接 & powershell.exe 会弹可见黑窗（Windows Terminal 默认宿主）
+        $vbs = Join-Path (Split-Path $sp) 'run-hidden-ps.vbs'
+        if (Test-Path $vbs) {
+            $sh = New-Object -ComObject WScript.Shell
+            $null = $sh.Run("wscript.exe `"$vbs`" powershell.exe `"$sp`"", 0, $false)
+        } else {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $sp -Mode RefreshStandby 2>&1
+        }
     }).AddArgument($guardScript)
     $script:GuardFillAsync = $script:GuardFillPs.BeginInvoke()
 })
 
 $CmbGuardFilter.Add_SelectionChanged({ Apply-GuardFilter })
-$TxtGuardSearch.Add_TextChanged({ Apply-GuardFilter })
+$TxtGuardSearch.Add_TextChanged({ Invoke-Debounced 'GuardFilter' 300 { Apply-GuardFilter } })
 
 $script:GuardTimer = New-Object Windows.Threading.DispatcherTimer
 $script:GuardTimer.Interval = [TimeSpan]::FromMilliseconds(400)
@@ -2174,6 +2200,29 @@ $BtnCopyScenePool.Add_Click({
 # ---- 批量导出（维护菜单调用）----
 function Invoke-BatchExport([string]$fmt, [string]$label) {
     if (-not $script:Nodes.Count) { $StatusText.Text = '请先「体检一次」加载数据'; return }
+    if ($fmt -eq 'JSON 数组 (全字段无损)') {
+        # 真正的 JSON 数组：单次聚合转换，而非逐行 NDJSON
+        $arr = foreach ($n in $script:Nodes) {
+            $listen = $script:ListenAddr
+            $port = $n.port
+            $name = Get-NodeCleanName $n
+            $tag = if ($n.antigravitySupported) { 'gemini-pure' } else { 'general' }
+            [pscustomobject]@{
+                url = "socks5h://${listen}:${port}"
+                name = $name
+                tags = @($tag)
+                priority = 1
+                is_healthy = $true
+                country = $n.country
+                googleCountry = $n.googleCountry
+                port = $port
+            }
+        }
+        $text = @($arr) | ConvertTo-Json -Depth 4
+        try { [Windows.Clipboard]::SetText($text) } catch { }
+        $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个端口的 JSON 数组（$label）"
+        return
+    }
     $lines = foreach ($n in $script:Nodes) { Format-ProxyEntry $n $fmt }
     try { [Windows.Clipboard]::SetText(($lines -join "`r`n")) } catch { }
     $StatusText.Text = "📋 已复制全量 $($script:Nodes.Count) 个端口（$label）"
@@ -2223,7 +2272,7 @@ $CmbFormat.Add_SelectionChanged({
     $StatusText.Text = "复制格式已切换为 $fmt（点任意行的「复制」按钮）"
 })
 $TxtSearch.Add_GotFocus({ if ($TxtSearch.Text -eq '搜索地区 / 城市 / 端口 / IP') { $TxtSearch.Text = '' } })
-$TxtSearch.Add_TextChanged({ if ($script:Nodes.Count) { Render } })
+$TxtSearch.Add_TextChanged({ if ($script:Nodes.Count) { Invoke-Debounced 'MainSearch' 300 { Render } } })
 
 # 自动同步：每 12 秒检查蜂窝订阅 profile 是否被刷新
 $script:Timer = New-Object Windows.Threading.DispatcherTimer
