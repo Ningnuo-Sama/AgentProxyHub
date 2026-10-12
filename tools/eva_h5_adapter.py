@@ -308,8 +308,24 @@ def read_magi_confidence():
         total_ports = len(ports)
         vetoed_count = sum(1 for v in ports.values() if isinstance(v, dict) and v.get('vetoed'))
         
-        # 现役核心绑定专线端口池
-        bound_ports = ['22023', '22024', '22021', '22010', '22038', '22002', '21015', '21014', '21050', '21051', '21034', '21012', '22022', '21017', '21022']
+        # 现役绑定端口池：以 bindings.json 实时账本为唯一来源（与驱动卡片/换绑同源），
+        # 消除历史硬编码 15 端口导致的"机体数量是死的"——账本增删后三贤人自动跟随。
+        # 账本键即端口名（"21015"），值内可能带 port 字段也可能不带，两者都认。
+        bound_ports = []
+        bindings_file = Path(os.environ.get('APHUB_DATA_DIR', os.path.join(ROOT, 'data'))) / 'bindings.json'
+        if bindings_file.exists():
+            try:
+                with open(bindings_file, 'r', encoding='utf-8-sig') as bf:
+                    bdata = json.load(bf)
+                if isinstance(bdata, dict):
+                    for k, v in bdata.items():
+                        try:
+                            bound_ports.append(str(int(v.get('port'))) if isinstance(v, dict) and v.get('port') else str(int(k)))
+                        except (TypeError, ValueError):
+                            continue
+            except Exception:
+                pass
+        bound_ports = list(dict.fromkeys(bound_ports))
         active_recs = [ports.get(p) for p in bound_ports if ports.get(p)]
         if not active_recs:
             active_recs = [v for v in ports.values() if isinstance(v, dict) and not v.get('vetoed')][:15]
