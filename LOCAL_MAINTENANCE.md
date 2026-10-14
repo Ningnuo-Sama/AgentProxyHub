@@ -35,174 +35,6 @@
 - 2026-09-29 补建 `AGENTS.md` 与本文件：此前本仓库没有任何维护脚手架，也在 `main` 上直接提交。
 - 2026-09-29 MCP 状态可信度修复（提交 `12b15b8`）：`list_matched_proxies` 原先只读测绘快照、完全不看本地内核是否在跑，导致内核已死、127 个端口全部拒绝连接时仍返回 22 个 S/A 级"可用"出口。现补上 `port_open` 真实 TCP 预检、`snapshot.age_hours` 快照年龄、`local_exit` 运行态块与 `warning`；`get_profile_bindings` 增加只读的 Antigravity 账号粘性，并写明两套账本语义不同。
 - 2026-09-29 迁移启动（进行中）：用户确认「AgentProxyHub 完整部署并取代蜂窝」，面板以蜂窝成熟版为底并入本项目 i18n 与场景靶场。安全网已建：`D:\Program Files\FengWoBridge\backups\20260929-134805-pre-agentproxyhub-migration`，内含 `config.yaml`/`nodes.json`/`gui_config.json` 等运行数据与 `MIGRATION-STATE.md` 状态快照。
-- 2026-10-02 渠道策略进一步明确：优先沿用当前 Gemini 反代、Flow 反代、中转站和官方账号，不替换正在使用的渠道；金库中的新凭据由 Agent 自动比对、识别、健康检查，成功后才候选化，不要求用户逐项审批。CLIProxyAPI 暂缓纳管；root 微信不纳入当前 Hermes/iLink 通道。脱敏渠道状态记录保存在 `D:\ProgramData\AgentProxyHub\credentials\vault\channel_status.json`。
-- 2026-10-01 用户拍板 Agent 全自动化方向：长期凭据金库为必选后台但可由检修开关关闭；允许 Agent 自动换绑、自动调用 Hermes A 方案微信告警；Gemini 与 GLM 权限等同，均可用于排障判定和审核；所有模型/渠道检查允许执行；CLIProxyAPI 纳入后续渠道纳管；调试能力集中到检修/调试面板，主面板以展示为主。凭据资料已用 Windows DPAPI CurrentUser 加密归档到 `D:\ProgramData\AgentProxyHub\credentials\vault`，未把明文写入 Git。提交 `10db8db`、`ffdb00c`。
-- 2026-09-29 迁移完成（提交 `de5081e`）：`core/gen-config.ps1` 建池引擎落地并反转 `sync_nodes.py` 为自有建池维护（`--rebuild` 触发重建）；面板以蜂窝 1804 行成熟双视图版为底并入场景靶场与批量导出，**按用户决定移除四国 i18n，界面纯中文**。已部署 `D:\Program Files\AgentProxyHub` 并完成运行数据迁移；内核切至本项目 `bin\mihomo.exe`（geosite/geoip 需同时存在于运行根目录）；开机自启快捷方式由「蜂窝出口桥接」换为「AgentProxyHub」；旧蜂窝面板进程已退出。端口段 21001-21080 / 22001-22045 未变，Antigravity 7 账号粘性绑定实测全部连通。验收：`Parser::ParseFile` 通过、125 端口池生成正确、7 绑定端口 curl 实测有出口、`mcp/test_mcp.py` 5/5 通过、面板实机启动 `logs\panel.log` 正常。**FengWoBridge 自此退役**：`D:\Program Files\FengWoBridge` 目录整体原样保留作回滚，上游「蜂窝加速器」客户端（`FengWo` 进程）仍需保持运行作为出口上游，不属于退役对象。
-
-## 2026-10-02 个人 TUN 接入准备（未上线）
-
-- 原按钮文案是 `出海介入` / `出海展開中`；`停止內核` / `啟動內核` 为独立人工急停。
-- 更正旧说明：固定125个SOCKS监听器绑定具体节点，rule模式切GLOBAL不会改变这些端口或MATCH规则。不得用GLOBAL冒充系统代理开关。
-- EVA原停止调用health而不是真停止；源码现补定向急停接口和人工闩锁。恢复入口检查闩锁并抑制已存活内核重复启动；尚未演练停掉现役业务。
-- 新增个人PERSONAL组与默认关闭TUN候选，125固定映射不变。真实内核 `-t` 校验通过。
-- 续轮1新增 `core/tun_watchdog.py` 本地故障判定：连续3次DNS/直连/本机服务异常才触发一次撤销回调，人工急停优先且不自动重启，单独海外代理失败不急停全部业务；5项新增测试通过，全套42项通过。当前仅判定模块，不是已部署常驻watchdog，探针与撤销执行器尚待接入。
-- 续轮2新增 `core/tun_controller.py` 真实控制器状态与仅撤销TUN执行器：显式禁用环境代理，凭据只读运行配置；不会停业务内核或改固定端口。现役读回TUN关闭，撤销返回already_disabled且未发送PATCH。新增4项测试，全套46项通过；常驻守护/真实开启仍未部署。
-- 续轮3新增 `tools/tun_watchdog_runner.py` 独立入口，有限DNS子进程探测、公网TCP与上线前可用本地服务检查，输出脱敏决策；`--once`实测现役TUN关闭、不重启内核。未安装成服务/计划任务；控制器失联导致TUN状态未知时仅报告监护降级，仍须管理员侧撤销路由后备路径，不能当作已完备保命闭环。
-- 续轮4已重新核实：当前会话为 Windows `High Mandatory Level`，APH mihomo PID 56072 正常运行；TUN 实际仍关闭。一次控制器 PATCH 返回204但读回仍为 false，已停止重复尝试，不能把204当上线证据。
-- 已生成 `D:\ProgramData\AgentProxyHub\candidates\personal-tun-active-20261002.yaml` 并用正式 mihomo `-t` 校验通过；未启动候选，避免第二内核抢占21909/固定端口。
-- 系统未检测到 Mihomo/Clash/Wintun TUN 网卡或198.18/默认路由变化；WLAN仍正常，UDP基线181个。真实上线剩余：通过受控入口加载候选/完整配置并验收DNS、国内直连、海外代理、本机服务和急停回滚。
-- 当前无已验证APH特权服务。不借FlClash服务绕权限；watchdog runner尚未安装为服务，Steam动态省流/镜像下载尚未实现。代码准备不等于上线。
-- 新代码回退标签 `pre-personal-tun-20261002`；运行配置、外置EVA页面、路由/DNS/系统代理快照位于 `D:\ProgramData\AgentProxyHub\backups\pre-personal-tun-20261002`。候选配置只存ProgramData，不进Git。
-- 修正适配层曾硬编码控制密钥：现从运行YAML读取。历史Git已有该密钥，需后续协调轮换，不能声称历史凭据已清除。
-
-## 2026-10-02 管理员续接实测
-
-- 当前宿主High权限，但旧mihomo对TUN PATCH实际报 `configure tun interface: Access is denied`，不以宿主权限当作旧内核权限证据；TUN未上线。
-- 尝试候选启动时PowerShell Start-Process数组参数中的空格未保留引号，导致内核未监听。已停止错误启动实例，用完整引号参数恢复正式配置。
-- 恢复后PID26700，21909监听正常；125固定SOCKS端口逐一TCP连接全部成功，真实控制器读回TUN关闭。期间业务连接会中断，不声称无影响。
-- 尚未验证Google/百度实际分流、UDP、看门狗断网闭环和按钮运行部署；后续不得重复无效启用操作，需要先核对新内核权限和守护部署。
-- 续轮4修复监护判定：控制器失联None保持unknown而非误报tun_off；DNS子进程超时转失败样本而不退出守护。新增3项回归测试，全套49项通过；本轮读回TUN关闭、125端口全通。unknown目前只告警，独立失联撤销后备尚未完成，仍禁止把此看门狗称作上线保护闭环。
-
-- 续轮5新增关闭TUN快照热重载执行器及路径/业务映射检查。真实演练收到HTTP400：mihomo SAFE_PATHS仅允许运行根目录，拒绝ProgramData快照；未绕过此保护，也未把失败说成回滚成功。应由后续正规部署流程将已核对关闭快照发布到运行根允许目录，再演练。
-- 续轮6审计确认不放宽SAFE_PATHS、不在普通adapter复制含密钥配置到Program Files；应由受控特权服务完成ACL、原子复制、哈希/disabled/125映射校验后再调用PUT。当前未实现该特权服务，故不宣称回滚闭环。
-- 安全审查提交417b822修复adapter同进程start/stop串行、拒绝空/null Origin的core写操作、启动失败重新置人工闩锁；不是跨进程锁，也不是用户认证。全套测试新增到50项，真实TUN仍关闭。
-
-- 续轮7在High会话中新增 `tools/prepare_runtime_rollback.py`：对ProgramData关闭TUN快照做disabled/125 listener映射校验、SHA-256记录、临时文件原子替换到运行目录。运行目录快照PUT热重载实测成功，读回TUN=false。
-- 隔离候选再次启动实测出现 `Meta` 网卡，但无198.18/分流路由可证；没有把网卡存在当成完整上线。已停止候选并恢复正式配置，21909正常，125固定端口全部TCP通过，live TUN=false。
-- 候选进程参数与现役进程短时重叠，暴露单实例启动门禁仍需加强；后续必须先确认旧进程退出和21909释放，再启动候选。
-
-- 续轮8为恢复入口增加自有mihomo单实例门禁：若已存在同路径owned进程则拒绝再次拉起；恢复runner仅允许已知APH入口名。新增回归测试，当前全套51项通过。注意该检查仍是恢复入口级门禁，不是跨进程原子锁；正式候选切换仍需先停止旧实例并确认21909释放。
-
-- 续轮9首次完成单实例候选切换实测：先确认旧实例退出，再以候选启动；Meta网卡出现，198.18.0.0/30及全局分流路由出现，live controller读回 `tun=true`。百度HTTP 200；Google HTTPS在8秒内握手超时，不能声称海外链路可用；125固定端口全通。
-- 随后使用运行目录 `rollback-disabled.yaml` PUT热重载，读回 `tun=false`；Meta网卡/路由消失，125固定端口全通，21909继续监听。再加载正式 `config.yaml` 复核关闭状态仍为false。完成一次可逆的TUN开→关演练，但Google代理、UDP/Steam、DNS劫持和常驻看门狗仍未验收。
-
-- 续轮10看门狗runner新增启动前manual-halt短路：人工急停时直接输出respect_manual_halt并退出，不探测、不调用撤销、不复活内核；新增测试后全套52项通过。正式状态仍TUN关闭。
-
-- 续轮11新增只读验收工具 `tools/verify_tun_runtime.py`：同时读控制器、Meta网卡、198.18/路由、125端口及百度/Google；在正式TUN关闭时正确返回 `not_verified`/退出码2，实测百度200、Google超时、125端口全通。该工具不改配置、不启停内核。
-
-- 续轮12修正EVA出海按钮：请求不再发送误导性的 `GLOBAL` 参数；`/api/route` 被后端拒绝时不再本地伪造切换成功，原文案保持不变并写入失败日志。外置页面改动尚未部署到正式静态服务，需刷新/部署后生效。
-
-- 续轮13补充看门狗海外HTTPS代理探针，将 `proxy_ok` 从固定True改为实际有限探测；探针失败作为证据输入，但仍不会因单个海外节点失败直接急停。新增测试后全套53项通过。
-
-- 续轮14收紧只读验收：`tun_verified` 现在必须同时满足TUN控制器、Meta网卡、分流路由、125固定端口、百度国内直连和Google海外HTTPS；任一失败返回not_verified。正式TUN关闭时实测退出码2，未隐藏海外超时。
-
-- 续轮15最终门禁复核：全套53项测试通过；只读验收返回not_verified/退出码2（TUN关闭、百度200、Google超时、Meta/路由无、125端口全通）。因此本目标在当前12轮内未达到全量上线条件，不标记完成；代码、候选、回退与实测边界已保留。
-
-- 续轮16在用户确认管理员会话后复核：`whoami /groups`为High；单实例直接启动候选时Meta网卡、198.18/分流路由、控制器`tun=true`和125端口均出现/正常，但Google HTTPS仍超时，严格验收仍为not_verified/退出码2。随后运行目录关闭快照热重载成功，TUN=false、Meta消失、125端口全通。正式状态已回退，未完成全量上线。
-- 续轮17再次发现正式内核曾意外退出，已恢复后再做单实例候选切换；结果与续轮16一致：TUN结构和125端口正常，Google超时。未换绑节点；随后已恢复正式配置，当前TUN关闭、125端口全通。
-
-- 续轮18对可用美国出口做只读/有限验证：MCP实测21012与21014 SOCKS5到Google:443均verified，延迟约0–1ms；当前AUTO-POOL活动为fw-21001。候选TUN启动后Meta/TUN=true、百度200，但系统HTTPS Google仍超时；尝试控制器切PERSONAL到21012返回HTTP400，未强行改组或换绑。已安全回退TUN=false、125端口全通。结论：节点局部SOCKS可通不等于系统TUN流量可用，仍需核查DNS/HTTPS路径和PERSONAL组配置后再上线。
-
-- 续轮19修复恢复通知遗漏：将Hermes/鲸管家通知移入 `ResidentEngineer.recover_mihomo()` 的统一成功出口，MCP包装层改为复用结果，避免PowerShell/其他本地调用恢复成功却不通知或重复通知。新增回归测试，全套54项通过；未实际触发恢复/通知，不声称Hermes已送达。
-
-- 续轮20实测通知链路：`notify_all` 返回 `hermes_weixin=true`、Hermes CLI returncode 0/status sent；鲸管家本次超时返回false。该实测使用固定去重event_id且不含凭据；证明Hermes发送通道可用，但不等同于已触发一次真实内核恢复通知。
-
-- 续轮21生成固定PERSONAL=fw-21012（MCP先前实测该SOCKS到Google:443 verified）的TUN候选，正式mihomo `-t`通过；启用后Meta/198.18/分流路由/tun=true/125端口均正常，但Google HTTPS仍超时。Cloudflare HTTPS可达（200），说明不是所有海外TLS均失败；Google域名解析结果漂移，仍需专门DNS/Google路径诊断。已回退关闭TUN，125端口全通，未改绑定。
-
-- 2026-10-03 DNS差异诊断：新增只读 `tools/google_dns_diagnostic.py`，精确传curl参数、禁用环境代理，21012完整TLS+Google204连续两次成功（远端域名解析）；同端口本机DNS解析模式连续两次TLS超时。证明DNS解析路径差异是当前Google失败的具体候选根因，不再把SOCKS握手称作HTTPS验证。未改配置/重启内核，live TUN=false；全套54测试通过。
-
-- 续轮22针对已证实DNS差异，在PERSONAL候选中加入fake-ip、国内过滤、DoH nameserver/proxy-server-nameserver及fallback；正式mihomo `-t`通过，全套54测试通过。仅写入ProgramData候选，未加载现役，需下一轮单实例实测Google并回退。
-
-- 2026-10-03最终续轮：为隔离21012候选补齐`dns-hijack: [any:53]`、gvisor和198.18地址，修正fake-ip-filter为`+.cn`；启动后严格验收首次返回 `tun_verified`/exit 0（百度200、Google204、Meta Up、分流路由、125端口全通），系统Google DNS返回198.18.0.12。finally中热重载关闭快照成功，随后确认tun=false、Meta网卡/路由数量均0、125端口全通。预检PowerShell读取不存在halt文件出现非终止错误；已核实统一is_halted为false（缺失表示未急停），后续必须用统一门禁而非裸Get-Content。源码补齐DNS劫持及回归断言，未部署正式常驻配置，UDP/Steam/独立watchdog/跨进程急停及失联回滚仍待完成。
-
-- 2026-10-03业务无干扰隔离改造第一步：新增`core/personal_tun_isolation.py`，独立个人候选默认TUN关闭、控制器21919带随机鉴权、设备APH-Personal、198.19地址，仅经loopback固定SOCKS21012出海，不复制125业务listeners或节点凭据，拒绝业务TUN开启/无物理接口/端口冲突。56测试通过，实际mihomo -t通过。仅生成ProgramData关闭候选，未启动第二内核、未停止业务内核；进程级防回捕、独立目录/急停/watchdog和Gemini长连接无干扰仍未验证。此前恢复通知移动到底层仍无法覆盖任意PowerShell直接启动，不能把它描述为已消除所有漏报。
-
-- 双内核隔离第二步：新增只读personal_tun_preflight门禁，人工急停优先，业务TUN未知或开启拒绝，个人可执行路径与业务相同拒绝，独立急停未安装拒绝，额外listeners和控制器冲突拒绝；返回明确不等于防环/Gemini无干扰验收。全套60测试通过。未安装/启动个人进程，需下一步实现总急停覆盖及独立生命周期。
-
-- 双内核隔离第三步：源码kernel_control增加个人路径白名单与stop_personal_kernel，只停个人路径、不置人工总闩锁、不修改系统代理；emergency_stop先设闩锁再精确停止业务及个人两个路径。新增模拟回归，全套63测试通过；未调用真实急停、未部署运行适配器、未安装个人可执行副本，跨进程锁与业务无干扰仍未验收。live业务TUN=false。
-
-- 双内核隔离第四步：control_lock切换为可重入Windows一字节文件锁，等待超时拒绝，真实子进程测试确认持锁时竞争退出7、释放后成功；全套65测试通过。仅使用同一协议的入口受保护，直接PowerShell/尚未接入的恢复和watchdog不受保护；未部署运行副本，不能宣称全系统跨进程协调完成。
-
-- 扩展授权后协调修复：恢复入口和TunController非GET写操作接入共用文件锁；个人exe预检收紧为总急停覆盖的固定路径；急停先用唯一临时文件原子发布闩锁再等待控制锁，恢复Popen前再次检查。66测试通过，未部署/切断业务。独立看门狗仍须指向21919，防回捕和Gemini无干扰未完成；锁等待与人工启动清闩锁竞态仍需完整审查。
-
-- 审查闭环：EVA stop分支移到外层control_lock之前，急停可以立即发布闩锁；文件锁总deadline含同进程RLock等待，新增真实线程竞争超时测试。67测试通过；未部署EVA、未真实急停，个人watchdog和防回捕仍待完成。
-
-- 个人监护入口：runner新增--personal固定读取个人config/21919，网络故障与连续三次控制器失联仅调用个人停止，人工闩锁短路、不启动/复活，独立失联防抖单次回调测试。70测试通过；默认--once实测业务tun_off。未安装个人配置/看门狗任务、未真实失联演练；个人停止后的路由/DNS撤销仍待验证，不能称保护服务已部署。
-
-- 独立个人关闭实例实测：安装personal目录同版本mihomo（SHA256与业务相同）及独立geo资源/config，-t通过；TUN=false启动个人21919，个人和业务控制器均正常；调用源码stop_personal_kernel后仅个人控制器消失，业务PID20788/创建时间01:14:05保持不变、业务TUN=false、125端口全通。--personal --once正确报告unknown、不误停业务。70测试通过。未开个人TUN、未部署EVA/常驻任务、未验防回捕及Gemini请求；安装副本仅关闭候选，安全退出能力是源码工具实测，不代表旧EVA已覆盖。
-
-- 业务上游防回捕清单：新增business_route_exclusions，有界TUN关闭现场解析7个业务server，均成功，形成9个精确/32或/128个人路由排除及上游域名fake-ip过滤；缺失解析/fake-IP拒绝。72测试及独立mihomo -t通过。仅生成关闭候选，未修改业务节点/绑定、未开TUN；端点变化必须刷新，现有连接远端IP、DoH端点、实时物理选路仍需覆盖，不把排除清单等同运行防环证明。
-
-- 防回捕覆盖补充：现场业务既有公网连接43.207.231.45与DoH 120.53.53.53，Find-NetRoute均为WLAN index9、网卡Up，业务TUN=false；源码清单扩展业务DoH/DoT endpoint及active_addresses，DNS域名解析缺失仍拒绝，localhost过滤保留。73测试通过；未生成新部署配置/开启TUN，开启后的真实选路尚未验证。
-
-- 双内核TUN首次受控实测：verify_isolated_tun有界刷新节点/DNS/既有连接，共12排除地址；个人开启TUN时系统Google204与显式21012远端解析Google204均成功，各现场端点Find-NetRoute保持WLAN；finally仅停止个人，个人网卡/路由均0，业务PID20788及创建时间不变、125端口全通、业务TUN=false。初次JSON单元素类型导致启动前拒绝，修复后完成演练。73回归通过。随后收紧工具退出判据并py_compile通过，未重跑改后版本；非全账号/UDP/Gemini流式/抓包验收，不能声称全量无干扰。
-
-- 双内核复验：演练配置改唯一文件名、增既有连接身份统计，收紧双HTTPS/物理路由/个人撤销退出门禁版本真实返回0；业务PID不变、个人网卡/路由0、系统及21012 Google204成功。35条既有连接开启期间保持32、退出后保持9，可能自然结束但未证明，不能据exit0声称长连接/Gemini无干扰。追加明确gemini_noninterference_verified=false及全连接保持布尔，py_compile/73测试通过（追加标识未再实跑）；业务TUN=false。
-
-- 持续连接实测：新增无重连PersistentProbe，经21012同一SOCKS+TLS socket在个人TUN开启前/期间/退出后均Google204、same_socket=true、服务器未要求关闭；收紧演练判据真实exit0。业务PID不变、上游WLAN、个人路由/网卡0；既有11条连接保持10条，不能断言其他连接为何结束。73回归通过，业务TUN=false。仅证明21012受控keep-alive，不等于所有账号/Gemini SSE/UDP验收。
-
-- 账号出口覆盖实测：现场账本为8个绑定端口（非历史7个）：21012/21022/22002/22010/22021/22023/22024/22038，TUN关闭基线与个人TUN开启期间全部完整TLS Google204；账号配置SHA256前后相同，未换绑。同21012持续socket开前/期间/退出后204、业务PID不变、上游WLAN、个人网卡/路由0，演练exit0。只验证出口，不含账号登录/模型生成/SSE；existing connections 24→23→16不判定自然结束原因。新增account_exit_baseline工具，不发付费请求。
-
-- 个人controller-loss故障注入：演练运行个人TUN后，将测试监护客户端指向已bind但不listen的loopback端口，3次真实连接拒绝，第3次PersonalControllerGuard调用stop_personal成功；真实个人控制器随后不可达，网卡/路由0，业务PID不变，21012持续TLS退出后204，8账号出口开启期间204、绑定配置不变。演练exit0，随后增加故障注入验收判据仅py_compile+73回归，未重跑收紧版。不是生产控制器自然失联或常驻服务验收。
-
-- 个人关闭意图持久化：新增personal_route_state，缺失/损坏默认off，close_personal在共用锁内先原子落盘off再只停个人，失败返回不隐藏；个人runner在off时不计失联、不重启，若读到TUN仍开则仅停止个人。75测试通过，--personal --once现场输出personal_desired_off。未接通EVA/启动入口、未安装常驻任务；控制器未知且off时的残余进程清理仍需生命周期完善。
-
-- 生命周期入口补齐：新增personal_lifecycle，start/stop/status仅面向独立个人内核；start遇人工急停返回停止內核，日常stop先持久化desired_on=false再个人停止，status同时报告控制器/意图/进程，EVA /api/route按action接入并保留出海介入/出海展開中及停止內核标签语义。78测试、py_compile和diff检查通过；源码现场desired_on=false、个人进程不存在、业务TUN=false。正式EVA服务尚未重启加载源码，个人关闭配置不是可用生产TUN配置，不能声称按钮已上线。
-
-- EVA源码适配层本轮隔离验证：启动源码tools/eva_h5_adapter.py临时监听8767（未重启任何现役mcp/业务mihomo），POST /api/route status返回个人controller未知、desired_on=false、process_running=false；POST stop返回ok=true、business_kernel_changed=false、label=出海介入；业务控制器仍tun=false。临时进程随后已停止。运行副本tools/eva_h5_adapter.py不存在/未部署，故不声称正式EVA已更新。
-
-- EVA前端动作已修正为向后端发送action=start/stop，不再发送旧mode=overseas/direct；仍保留文案出海介入/出海展開中。个人生命周期增加生产配置门禁：正式personal/config.yaml当前tun.enable=false时拒绝start（现场返回personal_config_not_ready），避免按钮伪成功或误开关闭候选；79测试通过、diff check通过。EVA启动脚本仍指向源码适配层，未正式部署/重启。
-
-- 个人开启候选安装：核对防回捕候选14条排除路由后，先将个人运行配置备份至personal/backups/config-disabled-20261003-022944.yaml，再写入同候选tun.enable=true；独立mihomo -t校验成功。未启动个人、desired_on仍false，看门狗--personal --once输出personal_desired_off；业务TUN=false、业务内核未重启。79测试通过。该配置含运行secret且在Program Files受控目录，不入Git；生产启动仍需单独生命周期/API验证与回退演练。
-
-- 正式个人生命周期闭环实测：源码personal_lifecycle.start启动已安装TUN=true候选，4秒后控制器21919报告tun_enabled=true/process_running=true/desired_on=true；系统Google204与显式21012 Google204均成功；stop只停个人并返回出海介入，随后个人控制器不可达、进程不存在、desired_on=false；业务控制器始终tun=false、业务PID未重启、125固定端口全通。79测试通过。已恢复个人关闭状态。仍未部署常驻看门狗/EVA正式适配层，未做Gemini/SSE/UDP全量验收。
-
-- 个人看门狗常驻入口：新增run-personal-watchdog.ps1/.bat及安装/卸载Scheduled Task脚本，任务名AgentProxyHub-Personal-TUN-Watchdog，AtLogOn、仅--personal --interval 5，不自动启动个人TUN。已实际Register并Start验证，任务启动个人runner且业务TUN=false；随后Stop任务，当前任务已安装但未运行（Ready）。runner直接受限测试超时是预期常驻行为，不是功能失败；卸载脚本可回退。79测试通过。
-
-- EVA源码API二次实测未完成：直接启动时发现已有多个eva_h5_adapter候选进程/8767竞争，POST请求出现连接意外关闭及stop返回500；随后清点未发现仍监听8767的EVA适配层，个人desired_on=false/进程不存在，业务状态未受影响。未继续强杀不明宿主进程，也未把失败误判为个人TUN故障。正式入口仍需单实例管理和端口归属后再验收。
-
-- EVA单实例包装器：新增run-eva-adapter.ps1/.bat，启动前先健康复用8767，非健康占用则拒绝，不杀未知进程；无占用时启动源码适配层并轮询health。EVA前端启动脚本已改指向包装器。现场验证adapter_started、重复启动existing_healthy_adapter_reused、/api/route status可用，随后停止验证进程；业务TUN=false。79测试通过。正式前端脚本已改源码路径但未重启用户前端。
-
-- 最终运行态收口：已启动已安装的AgentProxyHub-Personal-TUN-Watchdog登录任务；当前个人desired_on=false，任务仅执行个人21919关闭态监护，不启动个人TUN；业务控制器tun=false，125固定端口探活全通。任务状态现场为Running；EVA8767未保持常驻（避免重复实例），业务mihomo未执行重启。79测试通过。任务可用uninstall-personal-watchdog-task.ps1回退。
-
-- EVA最终单实例真实闭环：重启单实例包装器后，/api/route start仅在控制器21919回读tun_enabled=true后返回code=personal_started/出海展開中；随后stop返回ok、business_kernel_changed=false、出海介入。期间业务内核未重启，测试后个人desired_on=false、个人进程已停。此前旧适配层返回personal_start_submitted的竞态已修复；79测试通过。页面8768/适配层8767均可访问，但尚未做浏览器实际点击截图和Gemini/UDP全量业务验收。
-
-- 浏览器真实验收完成：访问8768 EVA页面，按钮初始显示“出海介入”；真实点击后页面显示“出海展開中”，后端start返回personal_started且controller tun=true；再次点击后页面恢复“出海介入 / LINE: OFF”，stop成功。业务控制器始终tun=false，个人desired_on=false，79测试通过。未调用生成/付费接口。该闭环覆盖按钮及生命周期，但仍不覆盖Gemini真实SSE、UDP/QUIC和自然失联。
-
-- 生产看门狗自然失联演练：个人TUN曾真实启动（PID21704、desired_on=true），随后仅强制终止个人可执行文件；20秒后业务PID/控制器仍正常、业务TUN=false，但发现旧逻辑不会把desired_on固化为false。已修复PersonalControllerGuard三次失联调用close_personal（先原子落盘off再个人停止），80测试通过；关闭意图已现场重置false，看门狗任务重启运行。该演练证明未复活个人且业务不受影响，也记录了修复前缺口；修复后尚未再做自然失联重复演练。
-
-- 修复后自然失联复测：启动个人TUN返回personal_started/tun=true，单独终止个人进程，等待20秒（≥3个5秒看门狗采样）后desired_on=false、个人进程/控制器不存在；看门狗任务仍Running；业务tun=false、125固定端口全通。80测试及diff通过。修复后自然失联链路已闭环，未复活个人或重启业务。
-
-- UDP/QUIC边界实测：清理个人test-active临时配置（送回收站），保留关闭快照config-disabled-20261003-022944.yaml。个人TUN启动/控制器tun=true成功；通过21012 SOCKS5 UDP ASSOCIATE返回127.0.0.1:21012，但向223.5.5.5:53发送标准DNS UDP请求6秒超时；finally独立stop成功、desired_on=false、业务tun=false、125端口全通。结论：当前固定SOCKS UDP链路尚未验收，不能宣称Steam/QUIC/UDP可用；未修改业务配置/绑定，未调用付费服务。
-
-- UDP失败归因对照：同机直连223.5.5.5:53的标准DNS UDP请求成功收到31字节响应，固定SOCKS UDP ASSOCIATE虽成功但经21012转发同请求6秒超时；故当前失败定位为BUSINESS-SOCKS/业务节点UDP转发或协议封装未验收，不是本机公网DNS整体不可达。个人desired_on=false、业务tun=false，未再启动个人。
-
-- EVA额度口径统一（不改UI结构）：以后端账号源quota_groups为唯一来源，新增/api/quota-summary并映射现有额度卡：Gemini/Claude均显示5H与weekly加权均值，生图显示gemini-3.1-flash-image账号模型均值；截图实测页面读取Gemini 55.1%（5H94.2%/7D55.1%）、Claude77.7%（5H100%/7D77.7%）、Gemini生图55.2%。原始账号字段仍可由/api/quota读取，未混用模型percentage冒充5H/周。80测试、py_compile和页面运行态验证通过。
-
-- 按用户确认清理Antigravity无真实账号绑定：先备份gui_config.json至C:\Users\1\.antigravity_tools\gui_config.json.bak-20261003-034831-before-remove-missing，再移除两条无账号映射（原代理ID对应21022/21012）；保留6条真实邮箱账号绑定。EVA适配层重启后/api/driver-cards与浏览器均实测6卡、6个真实邮箱，80测试通过。未删除账号文件或凭据，仅修改绑定账本。
-
-- EVA自动同步收口：机体卡片与总额度卡均设置15秒刷新；卡片按/api/driver-cards真实绑定数量自动增删，当前6个真实邮箱/6卡；额度按Antigravity quota_groups与模型字段填充。页面运行态实测6卡、6邮箱，Gemini54.9%、Claude77.7%；Python编译与80项测试通过。EVA仍只读同步，不代替Antigravity登录或创建绑定。
-
-- EVA日志显示优化：不改UI布局、不再对用户可见的本地实时日志做无必要脱敏；前端对连续相同消息合并显示并附重复次数（如“已读取真实日志：309条 ×2”），保留真实时间、来源和错误内容，减少重复刷屏。浏览器实测重复维护日志被合并，日志行从重复堆积降为3行可读流。
-
-- 日志筛选反馈修复：ERRORS按钮筛掉正常[MAINT]日志时，原页面为空白且新日志仍不可见；现增加当前筛选状态、实时新日志按筛选条件显示，以及无错误时的明确提示“当前暂无错误日志 · 切换 ALL 查看正常运行日志”。浏览器实测ERRORS下提示出现；ALL仍显示真实滚动日志。
-
-- 日志拓扑盘点与补接：原统一接口只有mihomo bridge、Hermes、Hermes watchdog、AgentProxyHub usage/autonomy五类文本源；发现未接入的Antigravity请求数据库C:\Users\1\.antigravity_tools\proxy_logs.db（request_logs表，约2GB）。新增只读antigravity_requests源，输出时间/方法/模型/HTTP状态/耗时/URL/错误，不读取request_body、token或响应正文；EVA自动日志现在实测包含该源，约510行合并展示。Flow-Tools源码未发现独立正式日志文件，Hermes缓存/数据库未纳入，避免把临时缓存当项目业务日志。
-
-- 日志刷屏优化：截图中的“已接入日志源 7/7 … 100条”是每10秒定时读取后重复写入LIVE流，并非新业务事件。现按统计摘要去重：统计未变化时不再追加一行；日志内容仍在维护区真实刷新，首次/来源变化才写入滚屏。浏览器实测2行日志，仅保留一次7/7摘要与真实请求日志，未改UI布局。
-
-- Flow-Tools日志补接修正：根据源码确认正式任务日志位于C:\Users\1\AppData\Local\FlowTools\task-logs.json（最近500条任务，非Git源码目录）。新增flow_tasks源，读取时间、账号、操作、模型、成功/失败、耗时、通道，不读取凭据/产物URL/提示词正文；EVA浏览器实测出现[flow_tasks]任务记录。该文件当前更新时间较早，若Flow产生新任务会随文件刷新被下一轮读取。
-
-- 日志门卫清洗：在EVA适配层入口做轻量字段化清洗，不做复杂NLP、不阻塞采集。Flow任务统一为“账号 生成图片/生成视频 · 模型 · 成功/失败 · 耗时 · 通道”；Antigravity请求统一为“模型 请求 · 成功/失败 · HTTP状态 · 耗时”；Mihomo结构化time/level/msg压成“时间 · 消息”，其余源压缩空白并截断500字符。原始日志仍留在各自文件/数据库，EVA只展示清洗结果。flow_tasks与antigravity_requests现场输出验证，80测试通过。
-
-- 2026-10-07 上游自动更新补链（蜂窝/风窝源）：`provider_a` 原走 `https://fengwo.io/api/v1/user/server/fetch` + web token，实测内置UA/ClashUA/不带凭据三种请求**均返回 403**，token 已失效；该机场只提供私有 `fengwo-v2://` 订阅协议，无订阅直链可拉，故改为与星辰同款「本机客户端档 + 每日校验落库」模式。新增 `data/refresh-fengwo-profile.ps1`（取 `%APPDATA%\com.follow\*\profiles\*.yaml` 最新档，校验 >30KB 且节点条目 ≥80 才覆盖 `data/fengwo_profile.yaml`，否则保留 last-known-good 并以退出码 1 报告）、`data/install-fengwo-refresh-task.ps1`（任务 `AgentProxyHub-fengwo-profile-refresh`，每日 06:20，StartWhenAvailable）、`data/install-upstream-refresh-task.ps1`（任务 `AgentProxyHub-upstream-refresh`，每日 06:40，调用 `refresh_sources` 把两份本地档刷进 `data/upstream_nodes.json`；此前**没有任何自动流程会调用 `refresh_sources`**，常驻 scheduler 明确不刷付费上游）。`provider_a` 注册改为 `profile_path`，原接口端点、失效状态与套餐信息保留在 extra。实测一次刷新：provider_a 87 + provider_b 46 = 133，无失败源；两个新任务均已真实 Register 并强制试跑返回 `LastTaskResult=0`。备份 `data/upstreams.json.bak-20261007-1600`。端口池重建仍为人工触发（`--rebuild` 会改写运行配置并重载内核，不动在跑的绑定）。
-- 2026-10-07 工具链坑记录：经 MCP `set_upstream_credential` 写含中文的 name/extra 时服务端报 `'utf-8' codec can't encode character '\udc90'`（该 MCP stdio 非 UTF-8），改用原子改写 `data/upstreams.json` 完成同一变更；后续涉及中文参数的 MCP 工具（write 方向）需先小样验证编码。
-- 2026-10-09 稳定基线固化（v2.0.0-stable，死循环自愈根治与静默巡检落地）：
-  1. 根治死循环频繁换绑：`core/hot_swap_executor.py` 换绑成功且复核出口健康后，原子同步写回 `confidence_state.json`，清除 `vetoed` 状态与 `vetoReason`，标记健康得分并记录 `lastHealedTime`，切断死循环重复换绑源头。
-  2. 防震荡冷却门禁：`scan_and_heal_all` 增加 1 小时（3600 秒）防抖冷却门禁（`Anti-Flapping Cooldown`），同端口 1 小时内严禁重复自动换绑，彻底锁死 A ↔ B 节点乒乓横跳。
-  3. 巡检静默与仅紧急告警：`core/resident_scheduler.py` 增加 `emergency_only` 机制（默认 True）；日常巡检正常与系统自动自治 100% 彻底静默（`routine_ok_silent`），禁止向微信群发常规巡检消息；仅当出现自愈失败（备选节点耗尽）、探针崩溃或服务严重故障时，才触发高保真结构化告警 `🚨【AgentProxyHub 紧急告警：需人工介入】`。
-  4. 修复异常吞没伪装：修复 `mcp/server.py` 探针异常时返回 `status: ok` 的 Bug，改回 `status: warning` 真实暴露异常。
-  5. 历史状态清洗与现场验收：清洗 `data/confidence_state.json` 中 27 个死循环残留的假性 vetoed 端口；双目录（`D:\Program Files\AgentProxyHub` 与 `D:\GitHub\AgentProxyHub`）完全同步；现役 29 个端口全量实测 S/A 级健康存活，实测 `--once` 换绑为 0、微信通知为 0（`notified: false`）。代码与运行态正式冻结为稳定基线。
-
-- 2026-10-10 澳门送中事故根治（锁区红线补全）：
-  1. **事故现象**：Antigravity Tools 账号 `vxjsjxyxsnvxuxnz75@gmail.com`（EVA-03，绑定 `127.0.0.1:21015`）的 Gemini 持续 `400 FAILED_PRECONDITION: User location is not supported for the API use.`（15:08:11 / 15:10:06）。根因不是端口断开，而是当天 11:47 的自治自愈把 `21015/21017/21022/21054/21063/22007` 六个端口集体“治愈”到了 `fw-21025`（上游真名即「澳门-专线节点-vip-免广告」），并把 `verified_country=Macao` 判定为合格出口。
-  2. **判定缺陷**：`core/confidence_engine.py` 与 `core/hot_swap_executor.py` 的送中判定只比较 `google_country == "china"`，**漏掉 Macao / Hong Kong**（而 `core/auto_guard.py` 早已把港澳列入，三处不一致）。后果是自愈把端口钉死在澳门出口，且此后每 5 分钟巡检持续上报 `vetoed_ports=[]` / `status=ok`，形成“系统毫无反应”的假象。
-  3. **二级缺陷**：`baselineCountry` 会被锁区出口污染（被写成 `MACAO` 后，自愈反而把澳门当“同国”首选候选）。
-  4. **代码修复**：新增 `core/blocked_regions.py` 作为锁区判定的**单一事实来源**（China / Hong Kong / Macao / Macau），并接入 `confidence_engine.py`（合规分、一票否决、`bound` 端口选取、基线国写入保护）与 `hot_swap_executor.py`（候选过滤、post_probe 校验、自愈触发）。此后禁止再散落 `== "china"` 字面量比较。
-  5. **数据修复**（业务端口号全部未变，符合“只换底层节点、不换业务端口”解耦契约）：`21015→fw-21027`(马来西亚)、`21017→fw-21050`(哥伦比亚)、`21022→xc-22015`(泰国)、`21025→fw-21027`(马来西亚)、`21031→xc-22022`(德国)、`21054→fw-21052`(澳大利亚)、`21063→fw-21028`(德国)、`22007→xc-22018`(印度)。8 次换绑均落 `repair_events.jsonl` 并逐个备份 `config.yaml`。
-  6. **运维修复**：现场存在两个重复的 `resident_scheduler.py` 守护进程且跑旧逻辑，已用 `resident-daemon-start.vbs` 拉起单一实例（Python Manager shim 的父子两进程属正常，非重复实例）。
-  7. **实机验收**：临时固定 `preferred_account` 到 EVA-03，实测 `gemini-3.8-flash-tiered` 返回 **HTTP 200（6.8s）**，随后已恢复轮询（`preferred_account=null`）；`request_logs` 显示同一账号 `a7o0rps@gmail.com` 由 15:14–15:17 的 400 转为 15:29 的 200，15:23 之后再无任何 400；守护进程连续两轮巡检 `status=ok / vetoed_ports=[]`；现役 30 端口池全量实测 **0 锁区**。
-  8. **遗留与边界**：蜂窝/星辰上游存在网关塌缩，多个“不同国家”节点会随机回落到同一台澳门机 `208.75.135.104` 与印尼机 `168.110.203.177`，修复后依赖新的送中判定在 5 分钟巡检内自动纠偏；`mcp/server.py` 进程仍加载旧代码，需重启 Agent 客户端才生效；Antigravity Tools `gui_config.json` 的 `proxy_pool` 中文标签与实际上游不符（如 `21030` 标德国实为菲律宾/印尼、`21054` 标澳大利亚实为尼日利亚、`21036` 标西班牙实为印尼），属标签治理待办，本次刻意未改动该文件（规避其“禁止 `ConvertTo-Json` 回写”的编码红线）。
 
 ## 回滚点
 
@@ -210,8 +42,96 @@
 | --- | --- | --- |
 | 2026-09-29 迁移前 | FengWoBridge | `local/custom` `193f000` |
 | 2026-09-29 迁移前 | AgentProxyHub | `main` `12b15b8` |
-| 2026-09-29 迁移完成 | AgentProxyHub | `main` `de5081e` |
-| 2026-10-09 稳定基线 v2.0 | AgentProxyHub | `main` `ecbab50` |
-| 2026-10-10 送中修复前 | AgentProxyHub | `main` `ecbab50` |
 
-运行数据回滚：`D:\Program Files\FengWoBridge\backups\20260929-134805-pre-agentproxyhub-migration`（迁移前）与 `D:\Program Files\FengWoBridge\backups\20260929-final-pre-retirement`（退役前全量快照）。回滚方式：停掉本项目 mihomo → 恢复蜂窝目录（未动过则直接 `启动桥接.bat`）→ 把自启快捷方式换回 `蜂窝出口桥接.lnk`。
+运行数据回滚：`D:\Program Files\FengWoBridge\backups\20260929-134805-pre-agentproxyhub-migration`。迁移期间前身运行副本保持原样不动，直到本项目通过验收。
+
+## 2026-10-13 代理漂移事故根因修复（Agent 执行，跨 Flow-Tools 对齐）
+
+现象：Flow-Tools 号池账号被熔断，报「代理出口跨大区漂移」——21013/21007 出口 Ukraine、22003/22008 出口 Macao，而 bindings.json 承诺 US。
+
+根因（均在本仓库内）：
+1. `confidence_engine.update_record()` 漂移判定按 **IP**（`current_ip != baseline_ip`），同 IP 被 Google 改判国别时判为零漂移 → 隐形漂移。
+2. 自动换绑触发条件仅「送中/离线」，**非锁区跨洲漂移（US→UA）永不触发**。
+3. `get_protected_bound_ports()` / `select_ports()` / `run()` 三处读 `v.get("port")`，而 bindings.json 端口是 **JSON 键** → 保护集为空。
+4. 审计 `repair_events.jsonl` 2026-10-10 曾 `heal_success` 到 `xc-22027`（Ukraine）并放行 → 漂移由自愈自己造成。
+5. `AgentProxyHub-account-guard` 计划任务被禁用。
+6. `nodes.json`（10-04）陈旧 `isSentToChina` 导致 22002/22003/22008 被假判送中。
+
+已修：
+- `core/hot_swap_executor.py`：`get_protected_bound_ports()` 改按 JSON 键解析（回退 `port` 字段）；`scan_and_heal_all()` 增加 `cross_continent`/`cross_country_same_region` 触发分支（`select_candidate_node` 跨大区拒绝逻辑保持不变）。
+- `core/confidence_engine.py`：新增 `load_bound_ports()` 并按键解析（`select_ports`/`run` 复用）；漂移触发改为「IP 或 Google 判国变化」；吸收基线收紧为仅 `same_country`；自愈触发扩展（送中/离线语义不变）；`auto_heal_port` 导入补 `except ImportError` 双形态（修脚本直跑崩溃）。
+- 数据：`bindings.json` 补登 21007/22003/22008；`nodes.json` 以实测定点修正 7 条陈旧「送中/中国」元数据；`confidence_state.json` 清理 21013/21007/22003/22008 陈旧基线（曾为 CHINA）与假否决。
+- 任务：`AgentProxyHub-account-guard` 已 `/ENABLE`。
+- 端口修复（走 `hot_swap_executor.py --port --proxy`，含热重载+失败回滚）：21013→fw-21012、21007→fw-21014、22003→fw-21003、22008→fw-21003；实测 7 端口 Google 判国全 US。
+
+备份：`backups/{hot_swap_executor,confidence_engine}.py.bak-20261013-043123`、`backups/confidence_engine.py.bak-*-boundparse`、`backups/nodes.json.bak-*-meta`、`backups/confidence_state.json.bak-*-align|*-meta`、`backups/bindings.json.bak-*-align`、`backups/config.yaml.bak-20261013-04*`。
+源码镜像 `D:\GitHub\AgentProxyHub` 已同步同两份 .py（未 commit）。
+
+遗留（未闭环）：
+- 测绘源（`data/port_map.csv`、`config/bridge.json`、`data/upstream_nodes.json`，均 10-01）陈旧，且**无任何调度执行 `core/sync_nodes.py`** → 本轮定点修正属「实测覆盖陈旧值」，后续手工 sync 可能回退；根治需把测绘刷新纳入计划任务。
+- `nodes.json` 的 `isSentToChina` 仍被 `confidence_engine` 用作否决输入之一（本轮已定点修正，根因未除）。
+- 真实漂移未处理：21022（Bahrain）、22010（Singapore）。
+
+### 2026-10-13 追加：测绘源刷新链路修复（订阅 API 失效 → 本地清单兜底）
+
+现象：`data/upstream_nodes.json`、`port_map.csv`、`config/bridge.json` 长期停在 2026-10-01；手工刷新 `refresh_sources` 两个源都 `ok:false`（provider_a URLError / provider_b HTTPError），只能保留 last-known-good。
+
+根因（三处）：
+1. **订阅 API 鉴权被拒**：两个源 `fetch_endpoint` 带 token 仍返回 **HTTP 403**（非地域问题——所有出口都 403，无鉴权时也是 403）。
+2. **本地清单兜底形同虚设**：`core/upstream_fetcher.py` 的 `profile_fallback` 只在「请求成功但内容为空」时生效，**请求失败直接抛错**，永远走不到兜底。
+3. **星辰采集脚本落盘路径错位**：`data/refresh-xingchen-profile.ps1` 的 `$dst` 指向**源码仓** `D:\GitHub\AgentProxyHub\data\xingchen_profile.yaml`，而运行时实际读取的是**部署副本** `D:\Program Files\AgentProxyHub\config\xingchen_profile.yaml` → 每日任务 `AgentProxyHub-xingchen-profile-refresh`（Clash UA，上次 rc=0）"成功"却写到没人读的地方。
+
+已修：
+- `core/upstream_fetcher.py`：把请求包进 try/except；**请求失败时若登记了 `profile_fallback` 就回落到本地清单**（否则原样抛出，失败语义不变）。
+- `data/refresh-xingchen-profile.ps1`：`$dst` 改为**部署副本**运行时路径，`$mirror` 留档源码仓；写入改为**原子替换**（staging + Move）；保留 `.bak-<时间戳>`；保持体积>20000 且节点数>30 的**双门禁**与「未过门禁保留上一版并非零退出」；**全文件改为纯 ASCII**（控制通道编码红线，中文注释曾导致 PS 解析报 MissingCatchOrFinally）。
+- 刷新成功：蜂窝 86 + 星辰 48 = **134 节点**（星辰为订阅直取，Clash UA `clash-verge/*`；无 UA 会 406）；`sync_nodes.py` 重衍 125 端口 / 存活 92。
+
+未做（按经验红线刻意不做）：**未执行 `gen-config.ps1` 端口池重建/重载**，避免打断存量账号长连接与端口粘性绑定。
+
+遗留：`nodes.json` 的 `googleCountry` 标注仍非实测（实测 21017=Colombia、21051=Ukraine、21070=Bahrain，元数据却标 US），需把国别测绘做成实测来源才能根治。
+
+## 2026-10-15 换蜂窝新账号后的流量治理（Agent 执行）
+
+现象：用户更换蜂窝账号（新订阅 Vip4-300GB，86 节点，入口域名 `base88.0098.fun`）后反馈流量消耗过快，要求只保留反代与显式绑定对象接入网关。
+
+根因（按实测贡献排序）：
+
+| 排名 | 流量来源 | 实测数据 |
+| :--- | :--- | :--- |
+| 1 | AUTO-POOL url-test 全量轮询 | 124 个成员 × 每 180 秒一轮 `generate_204`，失败重试叠加，今日日志 631 行里 571 行是 `policies.google.com` 判国探测 |
+| 2 | 旧账号残留节点被反复重连 | 新订阅只保留 4 个 fw 节点，config.yaml 却仍有 75 个指向 `vip88.0098.fun` 等旧入口的定义，121.14.13.199 / 18.167.36.222 持续 refused |
+| 3 | Antigravity 7 个 Google 账号 | `daily-cloudcode-pa.googleapis.com` 长连接，120 秒实测下载 17.4 MB（145 KB/s），这是业务刚需不属浪费 |
+| 4 | 未登记端口 22039 | `pythonw` 长连接，bindings.json 未登记，用途不明 |
+
+治理动作：
+
+1. **关停账号判国探测**：计划任务 `AgentProxyHub-account-guard` 已 `/DISABLE`，`autonomy_state.json` 的 `auto_rebind_enabled` 置 `false`。用户明确「里面住着的 Agent 没什么用，后面自己重修」，故不保留自动换绑。
+2. **AUTO-POOL 瘦身**：成员 124 → 4，节奏 180s → 1800s。保留 `proxies:` 里的全部节点定义（否则 listener 悬空），只修剪 group 成员。
+3. **生成器同步**（`core/gen-config.ps1`）：新增参数 `-AutoPoolInterval`（默认 1800，原硬编码 180）与 `-AutoPoolProbeNodes`（白名单，逗号分隔节点名；为空则退化为全量，保持历史行为）。`groupLines` 继续全量喂 ALL 组，另有 `probeLines` 只含白名单喂 AUTO-POOL。ALL 组增补 `DIRECT` / `REJECT` / `AUTO-POOL` 三项。输出行新增探测节点数与节奏。
+
+踩坑（重要，后续易再犯）：
+
+- **不要直接删 proxy 定义来阻止探测**。删除 fw 节点定义会让指向它的 listener 悬空，实测被删端口（21003/21007/21012/21013/21015/22003/22008）全部 HTTP 000。正确做法是保留定义、只修剪 group 成员——mihomo 的 listener 直连 proxy，节点只需存在于 `proxies:` 即可服务流量。
+- **重建脚本丢尾部**。手写重建逻辑时 ALL 组、GLOBAL 与整个 `rules:` 段被丢弃，YAML 校验在 `d["rules"]` 处 KeyError。今后改运行副本务必用 Python `yaml.safe_load` 做结构化断言，不能只 grep 关键字。
+- **`put` / configs?force=true 的 JSON 路径**。backslash 在 JSON 字符串里必须转义，`curl --data-raw "{\"path\":\"D:\\\\Program Files\\\\...\"}"` 可重载；单反斜杠一律 `400 {"message":"Body invalid"}`。
+- **`.ps1` 落盘 BOM**。用编辑工具改 `core/gen-config.ps1` 后 UTF-8 BOM 被剥掉，PowerShell 5.1 按 ANSI 解析导致 here-string 内 `$($listenerLines -join ...)` 后的 `- https://...` 出现 `Unexpected token`。所有面向 PowerShell 的 `.ps1` 必须是 UTF-8 带 BOM。
+
+效果（180 秒实测对比）：
+
+| 指标 | 治理前 | 治理后 |
+| :--- | :--- | :--- |
+| 下载 | 17.4 MB / 120s（约 17 GB/天） | 0.11 MB / 180s（约 53 MB/天） |
+| 内核后台探测 | 多路 `policies.google.com` 滚动重试 | 连接数为 0，bridge.log 120 秒增量 0 字节 |
+
+当前运行态：mihomo PID 17808 未重启（重载后已运行 5h+），250 个监听端口齐全，10 个业务端口 Google 判国 HTTP 200。回滚点 `backups\traffic-opt-20261015-053321\`（原始 config.yaml / bindings.json / nodes.json）与同目录下 `config.yaml.bak-trafficopt-*` / `.bak-restore-*` / `.bak-append-*` / `.bak-tailfix-*`。
+
+回滚命令（确认后再执行）：
+
+```
+curl.exe -X PUT -H "Authorization: Bearer <secret>" `
+  -H "Content-Type: application/json" `
+  --data-raw "{\"path\":\"D:\\Program Files\\AgentProxyHub\\backups\\traffic-opt-20261015-053321\\config_config.yaml\"}" `
+  "http://127.0.0.1:21909/configs?force=true"
+```
+
+未做：`data/nodes.json` 仍是 10-14 的 125 端口快照，与治理后的 4 + 45 配置不同步；用户后续重修判国逻辑时应一并重衍。重修方向见 `docs/judge-country-recheck-plan.md`（结论：改为事件驱动，不要恢复定时全量轮询）。`scratch/traffic_opt_config.py`、`restore_defs_prune_groups.py`、`restore_rules_tail.py`、`relisten_listeners.py` 是本次一次性脚本，已记录方法但不要当长期工具复用。

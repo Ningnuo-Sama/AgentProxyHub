@@ -21,7 +21,9 @@ param(
     [string]$ListenAddress = "0.0.0.0",
     [string]$OutboundInterface = "",
     [int]$ControllerPort = 21909,
-    [int]$HttpPortOffset = 10000
+    [int]$HttpPortOffset = 10000,
+    [int]$AutoPoolInterval = 1800,
+    [string]$AutoPoolProbeNodes = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -181,7 +183,21 @@ Write-Output "节点解析结果: 蜂窝出口 $($fwNodes.Count) 个 | 星辰出
 $proxyLines = New-Object System.Collections.Generic.List[string]
 $listenerLines = New-Object System.Collections.Generic.List[string]
 $groupLines = New-Object System.Collections.Generic.List[string]
+$probeLines = New-Object System.Collections.Generic.List[string]
 $mapping = New-Object System.Collections.Generic.List[object]
+
+# 省流量探测名单（2026-10-15）：
+# AUTO-POOL 的 url-test 会对每个成员每轮发一次 generate_204，124 个成员 × 180s
+# 的轮询是后台流量主因。默认只让「AI 直连」节点进探测名单，其余节点仍需留在
+# ALL 里供人工选择，但不参与自动体检。
+# 逗号分隔的节点名（如 "fw-21071,fw-21072,fw-21073,fw-21074"）；留空时退化为
+# 全部节点，保持历史行为。
+$probeAllow = @()
+if ($AutoPoolProbeNodes -and $AutoPoolProbeNodes.Trim().Length -gt 0) {
+    $probeAllow = $AutoPoolProbeNodes.Split(',') |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne '' }
+}
 
 # 生成蜂窝出口映射 (21001 起始，严格对齐原有分配)
 $port = $StartPort
@@ -202,6 +218,9 @@ foreach ($n in $fwNodes) {
     $listenerLines.Add("      proxy: $name")
     $listenerLines.Add("      udp: true")
     $groupLines.Add("        - $name")
+    if ($probeAllow.Count -eq 0 -or $probeAllow -contains $name) {
+        $probeLines.Add("        - $name")
+    }
     
     $httpPort = $null
     if ($HttpPortOffset -gt 0) {
@@ -223,8 +242,11 @@ foreach ($n in $fwNodes) {
         ServerPort = $n.Port
         OrigName   = $n.OrigName
     })
-    # 红线断言：蜂窝段 21001-21080，越段即中止（防止侵入星辰段并破坏端口粘性）
-    if ($port -gt 21080) { throw "蜂窝节点数超过 80，端口将越出 21001-21080 红线段，拒绝生成（请裁剪节点）" }
+    # 红线断言：蜂窝段 21001-21080，越段即截断（防止侵入星辰段并破坏端口粘性）
+    if ($port -gt 21080) {
+        Write-Warning "蜂窝节点数超过 80（共 $($fwNodes.Count) 个），已在 21080 截断，尾部 $($fwNodes.Count - 80) 个节点被丢弃（请核对订阅新增节点）"
+        break
+    }
     $port++
 }
 
@@ -247,6 +269,9 @@ foreach ($n in $xcNodes) {
     $listenerLines.Add("      proxy: $name")
     $listenerLines.Add("      udp: true")
     $groupLines.Add("        - $name")
+    if ($probeAllow.Count -eq 0 -or $probeAllow -contains $name) {
+        $probeLines.Add("        - $name")
+    }
     
     $httpPort = $null
     if ($HttpPortOffset -gt 0) {
@@ -268,8 +293,11 @@ foreach ($n in $xcNodes) {
         ServerPort = $n.Port
         OrigName   = $n.OrigName
     })
-    # 红线断言：星辰段 22001-22045
-    if ($xcPort -gt 22045) { throw "星辰节点数超过 45，端口将越出 22001-22045 红线段，拒绝生成（请裁剪节点）" }
+    # 红线断言：星辰段 22001-22045，越段即截断
+    if ($xcPort -gt 22045) {
+        Write-Warning "星辰节点数超过 45（共 $($xcNodes.Count) 个），已在 22045 截断，尾部 $($xcNodes.Count - 45) 个节点被丢弃（请核对订阅新增节点）"
+        break
+    }
     $xcPort++
 }
 
@@ -351,13 +379,16 @@ proxy-groups:
     - name: AUTO-POOL
       type: url-test
       url: https://www.gstatic.com/generate_204
-      interval: 180
+      interval: $AutoPoolInterval
       tolerance: 50
       proxies:
-$($groupLines -join "`r`n")
+$($probeLines -join "`r`n")
     - name: ALL
       type: select
       proxies:
+        - DIRECT
+        - REJECT
+        - AUTO-POOL
 $($groupLines -join "`r`n")
 rules:
     - GEOIP,lan,DIRECT,no-resolve
@@ -414,5 +445,6 @@ Write-Output "✅ AgentProxyHub 端口池与配置生成完成："
 Write-Output "   - 蜂窝出口: $($fwNodes.Count) 个 (端口 $StartPort - $($StartPort + $fwNodes.Count - 1))"
 Write-Output "   - 星辰出口: $($xcNodes.Count) 个 (端口 $XingchenStartPort - $($XingchenStartPort + $xcNodes.Count - 1))"
 Write-Output "   - 总计出口: $($mapping.Count) 个"
+Write-Output "   - AUTO-POOL 探测: $($probeLines.Count) 个节点 / 每 $AutoPoolInterval 秒一轮（ALL 组保持 $($groupLines.Count) 个可选）"
 Write-Output "   - 控制器  : 127.0.0.1:$ControllerPort"
 Write-Output "   - 配置文件: $(Join-Path $OutDir 'config\config.yaml')"
