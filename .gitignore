@@ -40,3 +40,20 @@ config/bridge.json
 
 config/*_profile.yaml
 data/refresh-*.ps1
+
+# ── 仅本地保留：远端只发布「程序 + README」 ──
+# 以下为内部设计/审计文档、测试与运维脚本，不随远端发布（本地文件保留）
+/docs/
+/test/
+/scripts/agent-teams/
+/AGENTS.md
+/LOCAL_MAINTENANCE.md
+/README_EN.md
+/README_JA.md
+/README_KO.md
+/scripts/fix_sent_to_china_flags.py
+/scripts/rebind_exit.py
+/scripts/remap_bound_ports_to_us.py
+/scripts/reset_bound_port_baselines.py
+/scripts/sync_at_pool_us_names.py
+/scripts/trim_fengwo_profile.py

@@ -6,12 +6,10 @@
 
 **专为 AI Agent、指纹隔离浏览器与多账号矩阵打造的智能代理分发枢纽**
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0-3b82f6.svg?style=flat-square)](https://github.com/ningnuo-dot/AgentProxyHub/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.0-3b82f6.svg?style=flat-square)](https://github.com/Ningnuo-Sama/AgentProxyHub/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-slate.svg?style=flat-square)](README.md)
 [![MCP Ready](https://img.shields.io/badge/Protocol-Model%20Context%20Protocol%20(MCP)-purple.svg?style=flat-square)](mcp/server.py)
-
-[中文说明](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [한국어](README_KO.md)
 
 </div>
 
@@ -52,7 +50,7 @@
 
 > **你不需要配置任何复杂的开发环境！我们已经为你编译并打包好了绿色完整发行版。**
 
-1. 前往右侧 **[Releases 发行页](https://github.com/ningnuo-dot/AgentProxyHub/releases)**；
+1. 前往右侧 **[Releases 发行页](https://github.com/Ningnuo-Sama/AgentProxyHub/releases)**；
 2. 下载 `AgentProxyHub-v1.0.0-windows-x64.zip`；
 3. 解压到任意目录（例如 `D:\AgentProxyHub`）；
 4. 双击运行 **`启动AgentProxyHub.bat`** 即可直接弹出控制面板！

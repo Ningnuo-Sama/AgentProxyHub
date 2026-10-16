@@ -192,6 +192,37 @@ class ResidentScheduler:
                     "interval_seconds": self.interval_seconds, "emergency_only": self.emergency_only,
                     "last_result": self._last_result}
 
+    # P2-33（2026-10-17 用户要求）：告警先经 Agent 总结成大白话再发。
+    # 机器原文（L0-11 / G5_density / 事件 UUID）对用户不可读，直接推送等于转嫁阅读成本。
+    _ALERT_SYSTEM = (
+        "你是 AgentProxyHub 的驻场工程师，负责把代理池巡检告警翻译给非技术用户。"
+        "要求：① 用简体中文大白话说清「哪里出了问题、严不严重、要不要动手」；"
+        "② 禁止出现检查项编号（如 L0-11）、守卫代号（如 G5_density）、事件 UUID 等机器标识；"
+        "③ 60 字以内，最多 3 行；④ 若只是需要人工确认但无实际危害，明说「暂不影响使用」；"
+        "⑤ 只依据给定事实，不猜测、不编造端口或账号名。"
+    )
+
+    def _summarize_alert(self, machine_text: str, *, event_id: str) -> str | None:
+        """把机器告警文案总结为大白话；任何失败都返回 None（调用方回落原文）。
+
+        约束：只走 daily 档（近零流量）；失败**不提高频率、不重试**（用户契约）。
+        """
+        try:
+            from .model_router import complete
+            prompt = (
+                "下面是代理池巡检的原始告警，请按系统要求总结：\n\n"
+                f"{machine_text}"
+            )
+            result = complete(prompt, urgency="daily", system=self._ALERT_SYSTEM)
+            if not result.get("ok"):
+                return None
+            text = (result.get("text") or result.get("content") or "").strip()
+            if not text or len(text) > 400:
+                return None
+            return text
+        except Exception:
+            return None
+
     def run_once(self, *, notify: bool = True) -> dict[str, Any]:
         """Run one read-only health pass; exceptions become auditable events.
 
@@ -262,7 +293,52 @@ class ResidentScheduler:
                 result["notified"] = False
                 result["notification_delivery"] = {"status": "skipped", "reason": "routine_ok_silent"}
             else:
+                # P2-33 件 1：**告警降频**。契约违规 / 基线超龄是持续状态而非一次性事件，
+                # 5 分钟一轮会反复推送（用户原话「怎么一直报警」）。以问题指纹为键，
+                # 同一指纹 24h 内只推一次；指纹变化或状态恢复后才再推。
+                # fail-closed 友好：去重状态不可用时**允许推送**并显式标注，绝不静默吞。
+                try:
+                    from .alert_dedup import check_and_record as _dedup_check
+                except ImportError:  # 脚本直跑
+                    from alert_dedup import check_and_record as _dedup_check  # type: ignore
+                dedup = _dedup_check(
+                    checks_failed=health.get("checks_failed"),
+                    guards_failed=health.get("guards_failed"),
+                    severity=severity,
+                    error_kind=(type(error).__name__ if error else None),
+                    is_emergency=is_emergency,
+                )
+                result["alert_dedup"] = {k: v for k, v in dedup.items() if k != "note"}
+                if not dedup.get("allowed"):
+                    result["notified"] = False
+                    result["notification_delivery"] = {"status": "suppressed",
+                                                       "reason": dedup.get("reason"),
+                                                       "fingerprint": dedup.get("fingerprint"),
+                                                       "note": dedup.get("note")}
+                    try:
+                        ACTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+                        with ACTION_LOG.open("a", encoding="utf-8") as handle:
+                            handle.write(json.dumps({
+                                "at": event["occurred_at"], "event_id": event["event_id"],
+                                "event_type": "scheduler.alert_suppressed",
+                                "severity": "info", "duration_ms": result["duration_ms"],
+                                "attestation": attestation,
+                                "checks_failed": health.get("checks_failed"),
+                                "guards_failed": health.get("guards_failed"),
+                                "notified": False,
+                                "alert_dedup": {k: v for k, v in dedup.items() if k != "note"},
+                            }, ensure_ascii=False) + "\n")
+                    except OSError:
+                        result["action_log_write_failed"] = True
+                    with self._lock:
+                        self._last_result = result
+                    return result
+                dedup_note = dedup.get("note")
+                dedup_degraded = dedup.get("dedup_state") == "unavailable"
+
                 # 仅在真正紧急（契约违规、服务彻底不可用）时发送高优先级告警
+                # P2-33（2026-10-17 用户要求）：告警**先经 Agent 总结成大白话**再发，
+                # 不把机器原文（检查项编号 / 事件 UUID）直接甩给用户。
                 lines = [
                     f"🚨【AgentProxyHub 紧急告警：需人工介入】",
                     f"• 状态：{health.get('status', 'error')} (等级: {severity})",
@@ -278,12 +354,21 @@ class ResidentScheduler:
                 if error:
                     lines.append(f"• 探针崩溃报错：{error}")
                 lines.append(f"• 事件编号：{event['event_id']}")
-                text = "\n".join(lines)
+                if dedup_degraded:
+                    # 降滤器没生效 ⇒ 必须让用户看见，不能装作在降噪
+                    lines.append(f"• 降滤状态：不可用（{dedup.get('state_reason')}），本轮未做去重")
+                elif dedup_note:
+                    lines.append(f"• 降滤说明：{dedup_note}")
+                machine_text = "\n".join(lines)
+
+                text = self._summarize_alert(machine_text, event_id=event["event_id"]) or machine_text
 
                 try:
                     delivered = self.notifier(text, event_id=event["event_id"], emote="alert", motion="jump")
                     result["notified"] = bool(delivered)
                     result["notification_delivery"] = delivered if isinstance(delivered, Mapping) else {"all": bool(delivered)}
+                    result["alert_text"] = text
+                    result["alert_raw"] = machine_text
                 except Exception:
                     result["notified"] = False
                     result["notification_delivery"] = {"all": False, "status": "exception"}
