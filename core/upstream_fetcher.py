@@ -147,21 +147,30 @@ def fetch_source(source: Dict[str, Any], opener: Callable[..., Any] | None = Non
         # 可选本地 SOCKS5 出口：用于上游直连不可达但现有代理可达的场景。
         # 仅通过环境变量显式启用，不改变默认直连行为。
         fetch_proxy = str(os.environ.get("APHUB_UPSTREAM_SOCKS5") or "").strip()
-        if fetch_proxy and opener is None:
-            command = ["curl.exe", "-sS", "--fail", "--max-time", "30", "--proxy", f"socks5h://{fetch_proxy}"]
-            for key, value in headers.items():
-                command.extend(["-H", f"{key}: {value}"])
-            command.append(url)
-            result = subprocess.run(command, capture_output=True, timeout=35, creationflags=0x08000000)
-            if result.returncode != 0:
-                raise urllib.error.URLError("upstream proxy fetch failed")
-            payload = _decode_payload(result.stdout)
-        else:
-            request = urllib.request.Request(url, headers=headers)
-            if opener is None:
-                opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context())).open
-            with opener(request, timeout=30) as response:
-                payload = _decode_payload(response.read())
+        # 上游订阅 API 不可达/鉴权被拒时（实测 2026-10-13 两个源均返回 403），
+        # 若登记了 profile_fallback 本地节点清单，就退回本地清单而不是整体失败——
+        # 否则 last-known-good 会无限期留旧快照。
+        try:
+            if fetch_proxy and opener is None:
+                command = ["curl.exe", "-sS", "--fail", "--max-time", "30", "--proxy", f"socks5h://{fetch_proxy}"]
+                for key, value in headers.items():
+                    command.extend(["-H", f"{key}: {value}"])
+                command.append(url)
+                result = subprocess.run(command, capture_output=True, timeout=35, creationflags=0x08000000)
+                if result.returncode != 0:
+                    raise urllib.error.URLError("upstream proxy fetch failed")
+                payload = _decode_payload(result.stdout)
+            else:
+                request = urllib.request.Request(url, headers=headers)
+                if opener is None:
+                    opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context())).open
+                with opener(request, timeout=30) as response:
+                    payload = _decode_payload(response.read())
+        except Exception:
+            if not extra.get("profile_fallback"):
+                raise
+            # 交由下方 profile_fallback 分支处理
+            payload = b""
     extra = source.get("extra") if isinstance(source.get("extra"), dict) else {}
     nodes = extract_nodes(payload, provider_id, str(extra.get("country") or ""))
     if not nodes and extra.get("profile_fallback"):

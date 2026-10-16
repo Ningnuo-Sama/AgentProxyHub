@@ -41,9 +41,11 @@ def _vault_token() -> str | None:
     return None
 
 
-def _post(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> bool:
+def _post_status(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> tuple[int, str]:
+    """返回 (HTTP 状态码, 说明)。`/notify` 的成功口径是 **202**（P2-4 契约）。"""
     url = os.environ.get("JG_NOTIFY_URL", DEFAULT_URL)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    token = _vault_token()
     request = urllib.request.Request(
         url,
         data=body,
@@ -51,18 +53,50 @@ def _post(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> bool:
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            **({"Authorization": f"Bearer {_vault_token()}"}
-               if _vault_token() else {}),
+            **({"Authorization": f"Bearer {token}"} if token else {}),
         },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return 200 <= response.status < 300
+            return int(response.status), "ok"
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), f"http_error:{exc.code}"
     except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
-        # Best effort by design; never turn a desktop notification outage into a
-        # proxy-engine outage. Keep the log short and avoid payload/token leakage.
         print(f"[jingguanjia-notify] unavailable: {exc}", file=os.sys.stderr)
-        return False
+        return 0, f"unreachable:{type(exc).__name__}"
+
+
+def _post(payload: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> bool:
+    status, _detail = _post_status(payload, timeout)
+    return 200 <= status < 300
+
+
+def notify_jingguanjia_verified(
+    text: str,
+    *,
+    event_id: str | None = None,
+    emote: str | None = None,
+    motion: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """双条件告警通道校验：**先 `/health`=200，再 `/notify`=202**。
+
+    单看进程存活或单看 POST 成功都不算通道可用（用户 P2-4 契约）。
+    """
+    health = jingguanjia_healthy(timeout)
+    if not health:
+        return {"ok": False, "channel": "jingguanjia", "health": "unreachable",
+                "reason": "health_not_200", "notify_status": None}
+    payload: dict[str, Any] = {"event_id": event_id or f"agentproxyhub-{uuid.uuid4().hex}",
+                               "text": str(text)[:2000]}
+    if emote:
+        payload["emote"] = emote
+    if motion:
+        payload["motion"] = motion
+    status, detail = _post_status(payload, timeout)
+    return {"ok": status == 202, "channel": "jingguanjia", "health": "200",
+            "notify_status": status, "detail": detail,
+            "auth": "bearer" if _vault_token() else "none"}
 
 
 def notify_jingguanjia(
@@ -110,10 +144,17 @@ def main() -> int:
     parser.add_argument("--event-id")
     parser.add_argument("--emote")
     parser.add_argument("--motion")
+    parser.add_argument("--verified", action="store_true",
+                        help="双条件校验（/health=200 且 /notify=202），返回 JSON")
     args = parser.parse_args()
     if args.wait_health:
         return 0 if wait_for_health(args.wait_seconds) else 1
     if args.text is not None:
+        if args.verified:
+            result = notify_jingguanjia_verified(args.text, event_id=args.event_id,
+                                                 emote=args.emote, motion=args.motion)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result.get("ok") else 1
         return 0 if notify_jingguanjia(args.text, event_id=args.event_id, emote=args.emote, motion=args.motion) else 1
     parser.error("--wait-health or --text is required")
     return 2

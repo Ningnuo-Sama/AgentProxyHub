@@ -1,6 +1,6 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $taskName = 'AgentProxyHub-Personal-TUN-Watchdog'
-$runner = 'D:\GitHub\AgentProxyHub\tools\run-personal-watchdog.ps1'
+$runner = 'D:\Program Files\AgentProxyHub\tools\run-personal-watchdog.ps1'
 if (-not (Test-Path -LiteralPath $runner)) { throw 'watchdog_runner_missing' }
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$runner`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn

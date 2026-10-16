@@ -32,6 +32,30 @@ except ImportError:  # 允许以脚本方式直接运行
     from blocked_regions import is_blocked_google_country
     from process_control_lock import process_control_lock
 
+# t42（P2-19 L2）：热替换前置闸。**拒绝即不换**（fail-closed），不是「换了再报」。
+# 判据与 MCP 侧 `mcp/server.py::_gate_precheck_bindings` 完全一致（同一批 write_guard 门禁 +
+# ledger_watch.check_bind_allowed 的 G4/G5 密度），避免「两条路径两套口径」。
+try:  # 包内导入
+    from .write_guard import (WriteRefused, refuse_cross_region_jump, refuse_dead_account,
+                              refuse_missing_contract)
+except ImportError:  # 允许以脚本方式直接运行
+    from write_guard import (WriteRefused, refuse_cross_region_jump, refuse_dead_account,
+                             refuse_missing_contract)
+
+# t42：`write_guard.region_of` 只认 ISO-2（"US"→NA），而 `confidence_state` 的 `lastProbe.googleCountry`
+# 是 Google 页面里的**全名**（"United States"）。直接把全名喂进去会得到 region=UNKNOWN，
+# 于是「同国」被判成「跨洲未知」而误拒（本文件 t42 首轮接线实测即踩中：21013 US→fw-21010 US 被拒）。
+# 因此这里统一过一遍本模块既有的权威归一化 `normalize_cc`（其 docstring 记录了 2026-10-12 同类事故），
+# 与 ledger_watch._check_contract_triple 的做法保持一致。
+
+
+def _cc(value: Any) -> str:
+    """国家值归一化为 ISO-2（全名 → 代码；空/未知 → 空串）。"""
+    try:
+        return str(normalize_cc(value) or "").strip().upper()
+    except Exception:
+        return str(value or "").strip().upper()
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APHUB_DATA_DIR") or ROOT_DIR / "data")
 PROD_DIR = Path(r"D:\Program Files\AgentProxyHub")
@@ -286,22 +310,152 @@ def select_candidate_node(port: int, current_proxy: Optional[str] = None) -> Dic
     return {"ok": True, "candidate": selected, "total_considered": len(candidates)}
 
 
+def _gate_hot_swap(port: int, new_proxy_name: str, reason: str = "autonomous_healing") -> Optional[Dict[str, Any]]:
+    """t42（L2）：`hot_swap_port_node()` 的**前置闸**。返回 `None` = 放行；返回 dict = 拒绝（调用方原样返回）。
+
+    判据（与 MCP 侧同一批门禁，拒绝即不执行换绑）：
+      1. `refuse_sticky_port_change` —— 端口号不得被改（只换底层节点）；
+      2. `refuse_missing_contract` —— 该口无 `expectedCountry` 契约 → fail-closed；
+      3. `refuse_dead_account` —— 该口绑定的 profile 已 retired/banned → 拒绝；
+      4. `refuse_cross_region_jump` —— 目标节点国 vs 契约期望国（跨洲/同区异国/锁区）一律拒绝；
+      5. G4/G5 密度 —— `ledger_watch.check_bind_allowed()`：动作会使出口 live 账号数超上限 → 拒绝。
+    目标国只从 `confidence_state.json` 的 `lastProbe` 读（**本地只读，0 WAN**）；
+    读不到目标国时按"未知"处理：跨洲判据无法成立 → **fail-closed 拒绝**（绝不盲换）。
+    """
+    p = str(int(port))
+    prof: Optional[str] = None
+    contract: Dict[str, Any] = {}
+    try:
+        if BINDINGS_FILE.exists():
+            with open(BINDINGS_FILE, "r", encoding="utf-8-sig") as f:
+                raw = f.read().strip()
+            if raw:
+                entry = (json.loads(raw) or {}).get(p) or {}
+                if isinstance(entry, dict):
+                    prof = entry.get("profile")
+                    contract = dict(entry)
+    except Exception:
+        pass  # 账本读失败 → contract 为空 → 下面 refuse_missing_contract 会拒绝（fail-closed）
+
+    try:
+        # 1) 粘性端口：监听器必须仍指向同一端口号
+        # ⚠️ 取**该业务口自身**的监听器映射（`in-<port>` / `in-http-<port>`），
+        # 不可用目标节点的 proxy 名反推端口号——同一物理出口可由多个 fw-* 节点定义共同承载
+        # （例：`fw-21011` 同时服务 21010/21011/21013），反推会把 21013 误判成 21011。
+        listener_port: Optional[int] = None
+        proxy_now = _listener_proxy_for_port(int(port))
+        if proxy_now:
+            listener_port = int(port)
+        if listener_port is None:
+            raise WriteRefused("sticky_port", f"listener_missing: 端口 {port} 无对应监听器", {"port": int(port)})
+        if listener_port != int(port):
+            raise WriteRefused("sticky_port", f"port_renumbered: {port}->{listener_port}",
+                               {"port": int(port), "listener_port": listener_port})
+
+        # 2) 契约缺失 → fail-closed
+        refuse_missing_contract(port=int(port), contract=contract)
+
+        # 3) 死号不得占用受保护名额
+        if prof:
+            refuse_dead_account(profile=str(prof))
+
+        # 4) 跨洲 / 锁区（目标国来自本地 confidence_state，0 WAN）
+        expected = _cc(contract.get("expectedCountry"))
+        target = ""
+        if CONFIDENCE_FILE.exists():
+            try:
+                conf = json.loads(CONFIDENCE_FILE.read_text(encoding="utf-8-sig")).get("ports", {}) or {}
+                t_num = re.sub(r"\D", "", str(new_proxy_name)) or ""
+                t_rec = conf.get(t_num) or {}
+                lp = t_rec.get("lastProbe") or {}
+                # t42：全名 → ISO-2（否则 write_guard.region_of 会把它当 UNKNOWN 而误判跨洲）
+                target = _cc(lp.get("googleCountry") or lp.get("country") or t_rec.get("baselineCountry"))
+            except Exception:
+                target = ""
+        if not target:
+            # 目标国未知 → 无法证明"没跨洲" → fail-closed
+            raise WriteRefused("cross_region", "target_country_unknown: 目标节点无任何实测国别记录",
+                               {"port": int(port), "expected": expected, "target_proxy": new_proxy_name,
+                                "note": "只换已知国别节点；未知出口一律拒绝（绝不盲换）"})
+        refuse_cross_region_jump(expected_country=expected, target_country=target, port=int(port))
+
+        # 5) G4/G5 密度（0 WAN；enforce 关闭时只报告）
+        try:
+            from .ledger_watch import check_bind_allowed as _cba  # type: ignore
+        except ImportError:
+            from ledger_watch import check_bind_allowed as _cba  # type: ignore
+        verdict = _cba(int(port), prof or None)
+        if verdict.get("allowed") is False:
+            return {"ok": False, "port": int(port), "error": f"gate_refused: {verdict.get('reason')}",
+                    "refused_reason": str(verdict.get("reason")), "gate": "density_g4g5",
+                    "bindings_changed": False, "config_changed": False, "gate_verdict": verdict}
+    except WriteRefused as exc:
+        _append_gate_refusal(port, new_proxy_name, reason, exc)
+        return {"ok": False, "port": int(port), "error": f"gate_refused: {exc}",
+                "refused_reason": str(getattr(exc, "reason", exc)), "gate": getattr(exc, "gate", None),
+                "detail": getattr(exc, "detail", {}) or {},
+                "bindings_changed": False, "config_changed": False}
+    except Exception as exc:  # 闸门自身异常 → fail-closed，绝不放行
+        wrapped = WriteRefused("gate_unknown_state", f"{type(exc).__name__}: {exc}",
+                               {"port": int(port), "target_proxy": new_proxy_name})
+        _append_gate_refusal(port, new_proxy_name, reason, wrapped)
+        return {"ok": False, "port": int(port), "error": f"gate_refused: {wrapped}",
+                "refused_reason": str(wrapped.reason), "gate": "gate_unknown_state",
+                "detail": wrapped.detail, "bindings_changed": False, "config_changed": False}
+    return None
+
+
+def _append_gate_refusal(port: int, new_proxy_name: str, reason: str, exc: Exception) -> None:
+    """拒绝留痕（只写本地 repair_events.jsonl，不触任何网络、不打印任何凭据）。"""
+    try:
+        append_repair_event("gate_refused", {
+            "port": int(port),
+            "target_proxy": new_proxy_name,
+            "request_reason": reason,
+            "gate": getattr(exc, "gate", None),
+            "refused_reason": str(getattr(exc, "reason", exc))[:200],
+        }, severity="action_required")
+    except Exception:
+        pass
+
+
+def _listener_proxy_for_port(port: int) -> Optional[str]:
+    """只读 `in-<port>` 当前映射的 proxy 名（供粘性端口校验）；不解析任何凭据字段。"""
+    try:
+        text = CONFIG_PATH.read_text(encoding="utf-8")
+        m = re.search(rf'name:\s*in-{int(port)}\b', text)
+        if not m:
+            return None
+        tail = text[m.end():m.end() + 400]
+        pm = re.search(r'proxy:\s*([^\s#]+)', tail)
+        return pm.group(1).strip() if pm else None
+    except Exception:
+        return None
+
+
 def hot_swap_port_node(port: int, new_proxy_name: str, reason: str = "autonomous_healing") -> Dict[str, Any]:
     """对指定端口在底层执行物理节点热替换。
-    
-    1. 备份 config.yaml；
-    2. 精确替换 in-<port> 与 in-http-<port> 的 proxy 字段；
-    3. 调用 PUT /configs?force=true 热重载；
-    4. 实测端口验证（TCP连通 + Google判定非China）；
-    5. 若验证失败自动回滚；若成功落盘审计日志并发送通知。
+
+    1. **t42 前置闸**：跨洲/锁区/契约缺失/密度/死号任一不过 → 拒绝并原样返回（不备份、不改配置、不热重载）；
+    2. 备份 config.yaml；
+    3. 精确替换 in-<port> 与 in-http-<port> 的 proxy 字段；
+    4. 调用 PUT /configs?force=true 热重载；
+    5. 实测端口验证（TCP连通 + Google判定非China）；
+    6. 若验证失败自动回滚；若成功落盘审计日志并发送通知。
     """
     if not CONFIG_PATH.exists():
         return {"ok": False, "error": f"config_not_found: {CONFIG_PATH}"}
+
+    # t42（P2-19 L2）：**执行前**过闸。拒绝即不换——这里在任何副作用之前。
+    refused = _gate_hot_swap(port, new_proxy_name, reason=reason)
+    if refused is not None:
+        return refused
 
     # 跨进程锁：CLI --scan 与常驻 scheduler 可能同时触发换绑，
     # 并发读改写同一 config.yaml 会互相覆盖甚至写坏配置。
     with process_control_lock():
         return _hot_swap_port_node_locked(port, new_proxy_name, reason=reason)
+
 
 
 def _hot_swap_port_node_locked(port: int, new_proxy_name: str, reason: str = "autonomous_healing") -> Dict[str, Any]:
@@ -443,7 +597,6 @@ def auto_heal_port(port: int, reason: str = "auto_detect") -> Dict[str, Any]:
     candidate = res["candidate"]
     return hot_swap_port_node(port, candidate["name"], reason=reason)
 
-
 def get_protected_bound_ports() -> Set[int]:
     """获取所有在用绑定的保护端口集合（bindings.json + Antigravity粘性端口）。"""
     bound_ports = set()
@@ -452,8 +605,16 @@ def get_protected_bound_ports() -> Set[int]:
             with open(BINDINGS_FILE, "r", encoding="utf-8-sig") as f:
                 content = f.read().strip()
                 if content:
-                    for v in json.loads(content).values():
-                        p = v.get("port") if isinstance(v, dict) else None
+                    for k, v in json.loads(content).items():
+                        # bindings.json 条目形如 {"21013": {...}}：端口是 JSON 键；
+                        # 兼容历史/异形条目里显式存放的 "port" 字段作为回退。
+                        p = None
+                        try:
+                            p = int(str(k).strip())
+                        except (TypeError, ValueError):
+                            p = None
+                        if p is None and isinstance(v, dict):
+                            p = v.get("port")
                         if p:
                             bound_ports.add(int(p))
     except Exception:
@@ -488,6 +649,7 @@ def scan_and_heal_all(scope: str = "bound") -> List[Dict[str, Any]]:
         last_probe = rec.get("lastProbe") or {}
         g_country = str(last_probe.get("googleCountry") or "").lower()
         veto_reason = rec.get("vetoReason") or ""
+        last_drift = ((rec.get("driftEvents") or [{}])[-1]).get("kind") or ""
 
         # 防震荡冷却门禁：若距离上次换绑不足 3600 秒 (1小时)，跳过，坚决防止 A <-> B 频繁来回横跳！
         last_healed = float(rec.get("lastHealedTime") or 0.0)
@@ -502,6 +664,11 @@ def scan_and_heal_all(scope: str = "bound") -> List[Dict[str, Any]]:
         elif rec.get("offline") or veto_reason == "offline":
             needs_heal = True
             reason = "node_offline"
+        elif last_drift in ("cross_continent", "cross_country_same_region"):
+            # 跨洲/同大区跨国漂移同样纳入自愈候选（原有「送中/离线必换」语义不变）。
+            # select_candidate_node 内的跨大区拒绝保护依然生效：选不到同区候选即返回 no_candidate。
+            needs_heal = True
+            reason = f"drift_{last_drift}"
 
         if needs_heal:
             heal_res = auto_heal_port(port, reason=reason)

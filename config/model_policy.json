@@ -1,24 +1,33 @@
 {
-  "version": 1,
+  "version": 2,
   "daily": {
+    "model": "cn:deepseek-v4.1-flash",
+    "provider": "local_huaiyuan",
+    "base_url": "http://127.0.0.1:2666/v1",
+    "key_env": "APHUB_LOCAL_LLM_KEY",
+    "vault_name_match": "huaiyuan",
+    "purpose": "驻场工程师日常判定与报告（本地 deepseek-v4.1 · loopback · 近零流量）"
+  },
+  "gemini": {
     "model": "gemini-3.8-flash-tiered",
     "provider": "antigravity",
     "base_url": "http://127.0.0.1:8045",
-    "purpose": "日常对话与常规工程任务"
+    "credential_ref": "gemini3.8flash",
+    "purpose": "本地 AT 网关兜底（8045，DPAPI 凭据）"
   },
   "highest_urgency": {
     "model": "gpt-6.1-sol",
     "provider": "aicost",
     "base_url": "https://www.aicost.me",
     "credential_ref": "aicost_gpt6_1_sol",
-    "purpose": "最高事态；通过 AICost 调用 GPT-6.1-SOL"
+    "purpose": "最高事态；通过 AICost 调用 GPT-6.1-SOL（付费，需人工确认）"
   },
   "fallback": {
     "model": "glm-5.3-flash",
     "provider": "zhipu",
     "base_url": "https://open.bigmodel.cn/api/paas/v4",
     "credential_ref": "zhipu_glm_flash",
-    "purpose": "Gemini 日常模型不可用时的低成本兜底"
+    "purpose": "本地网关与 AT 网关都不可用时的低成本兜底"
   },
   "glm": {
     "model": "glm-5.3-flash",
@@ -32,13 +41,21 @@
     "auto_upgrade_to_highest": true,
     "auto_paid_generation": false,
     "media_handoff": "flow_tools",
-    "fallback_chain": ["gemini-3.8-flash-tiered", "glm-5.3-flash"],
-    "highest_urgency_model": "gpt-6.1-sol"
+    "fallback_chain": ["cn:deepseek-v4.1-flash", "gemini-3.8-flash-tiered", "glm-5.3-flash"],
+    "highest_urgency_model": "gpt-6.1-sol",
+    "chain": ["daily", "gemini", "fallback"],
+    "critical_chain": ["highest_urgency"]
   },
   "evidence": {
+    "local_endpoint_verified": true,
+    "local_endpoint_verified_at": "2026-10-17T04:12:00+08:00",
+    "local_endpoint_model_returned": "deepseek-v4.1-flash",
+    "local_endpoint_probe_usage": {"prompt_tokens": 35, "completion_tokens": 16, "total_tokens": 51},
+    "local_endpoint_credential_source": "dsh://refs/HUAIYUAN_API_KEY (sha256[:12]=e78d75cc4de1)",
     "gemini_model_list_verified": true,
     "gemini_tiered_model": "gemini-3.8-flash-tiered",
     "highest_urgency_runtime_managed": true,
-    "aicost_gpt6_1_sol_model_verified": true
+    "aicost_gpt6_1_sol_model_verified": true,
+    "previous_daily_model": "gemini-3.8-flash-tiered"
   }
 }

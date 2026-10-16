@@ -49,29 +49,177 @@ except ImportError:
     sys.path.insert(0, ROOT_DIR)
     from core.upstream_fetcher import load_sources, refresh_sources
 
+# t29：跨进程账本锁统一走 core/aphub_lock（唯一实现），与 CloakMulti 共用同一套语义。
+# 事实订正：t20 曾断言 "LK_LOCK 不阻塞" —— 那是**同进程**探针的假象（同进程同字节重入会抛
+# Resource deadlock avoided）；实测 **跨进程** LK_LOCK 确实会等待。真正的缺陷是
+# ① 没有超时（持锁方卡死会无限挂住）② 两侧无共同失败语义。现改为 LK_NBLCK + 20ms 自旋，
+# 默认 10s 超时；超时抛 LockTimeout，调用方**必须放弃写入**（fail-closed，绝不带锁失败后强写）。
+try:
+    from core.aphub_lock import (LockTimeout as _AphubLockTimeout, bindings_lock as _aphub_bindings_lock,
+                                 upstreams_lock as _aphub_upstreams_lock)
+except ImportError:  # 兼容直接以 python mcp/server.py 启动
+    sys.path.insert(0, ROOT_DIR)
+    from core.aphub_lock import (LockTimeout as _AphubLockTimeout, bindings_lock as _aphub_bindings_lock,
+                                 upstreams_lock as _aphub_upstreams_lock)
+
+# t42（P2-19）：拒绝式前置闸。**闸门语义 = 拒绝即不写**（fail-closed），
+# 绝不允许「先写再报」/「报警但继续写」。t24/t33 已把闸门逻辑落在
+# core/write_guard.py（跨洲/锁区/契约缺失/密度/死号）与 core/ledger_watch.py
+# 的 check_bind_allowed()（G4/G5 密度）；本文件负责把它们**接到真实写点之前**。
+try:
+    from core.write_guard import WriteRefused as _WriteRefused, refuse_cross_region_jump as _refuse_cross_region_jump
+    from core.write_guard import refuse_missing_contract as _refuse_missing_contract
+    from core.write_guard import refuse_dead_account as _refuse_dead_account
+except ImportError:  # 兼容直接以 python mcp/server.py 启动（无 core 包上下文）
+    sys.path.insert(0, ROOT_DIR)
+    from core.write_guard import WriteRefused as _WriteRefused, refuse_cross_region_jump as _refuse_cross_region_jump
+    from core.write_guard import refuse_missing_contract as _refuse_missing_contract
+    from core.write_guard import refuse_dead_account as _refuse_dead_account
+try:
+    from core.ledger_watch import check_bind_allowed as _check_bind_allowed
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, ROOT_DIR)
+    from core.ledger_watch import check_bind_allowed as _check_bind_allowed
+
+# 供自检/断言使用：本进程将使用的两把锁路径
+LOCK_TIMEOUT_S = 10.0
+
+
+def _gate_refused(tool: str, exc: _WriteRefused, **extra) -> Dict[str, Any]:
+    """t42：闸门拒绝的**唯一**返回形态：`success/ok=False` + 可判别 `refused_reason`，且**未发生任何写入**。
+
+    与 `_lock_fail_closed` 同一纪律：返回体自带判别字段，调用方（Agent/上游）
+    无需猜「到底是拒绝了还是失败了」。
+    """
+    detail = {
+        "code": "gate_refused",
+        "gate": getattr(exc, "gate", None),
+        "refused_reason": str(getattr(exc, "reason", exc)),
+        "detail": getattr(exc, "detail", {}) or {},
+        "tool": tool,
+        "bindings_changed": False,
+    }
+    detail.update(extra)
+    try:
+        from core.autonomy_core import EventStore  # 与其它写点一致：函数内导入
+        EventStore().append("gate_refused", detail, severity="action_required")
+    except Exception:
+        pass
+    try:
+        print("[gate_refused] %s: %s (%s)" % (tool, detail["refused_reason"], detail["gate"]),
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    return {"success": False, "ok": False, "refused_reason": detail["refused_reason"], **detail}
+
+
+def _gate_precheck_bindings(tool: str, port: int, profile: str,
+                            contract: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """t42：绑定/换绑类写点的**共用前置闸**。返回 `None` = 放行；返回 dict = 已拒绝（调用方原样返回）。
+
+    顺序即优先级（fail-closed 逐级收紧）：
+      1. 契约缺失   → `refuse_missing_contract`（不得回退观测基线）
+      2. 死号       → `refuse_dead_account`（注册表缺失/retired/banned 一律拒绝）
+      3. 跨洲/锁区  → `refuse_cross_region_jump`（用该口契约期望国比对目标国）
+      4. G4/G5 密度 → `check_bind_allowed()`（0 WAN；`enforce` 关时只报告不拒绝）
+    任何一条抛 `WriteRefused` 或 `check_bind_allowed` 判 `over_max` → 立即返回拒绝，**不进入写段**。
+    """
+    p = str(int(port))
+    prof = str(profile or "")
+    try:
+        _refuse_missing_contract(port=int(port), contract=contract)
+        if prof:
+            _refuse_dead_account(profile=prof)
+        expected = str((contract or {}).get("expectedCountry") or "").strip().upper()
+        target = str((contract or {}).get("_target_country") or expected or "").strip().upper()
+        # t42：`write_guard.region_of` 只认 ISO-2，而候选行的 country/countryCode 常是全名
+        # （"United States"）。全名直接比对会把「同国」误判成「跨洲未知」而误拒，
+        # 故统一过 `hot_swap_executor.normalize_cc`（与 ledger_watch L0-12 同一权威归一化）。
+        expected = _iso2(expected)
+        target = _iso2(target)
+        if target:
+            _refuse_cross_region_jump(expected_country=expected, target_country=target, port=int(port))
+        verdict = _check_bind_allowed(int(port), prof or None)
+        if verdict.get("allowed") is False:
+            return _gate_refused(
+                tool, _WriteRefused("density_g4g5", str(verdict.get("reason") or "density_refused"),
+                                    {"port": int(port), "verdict": verdict}),
+                gate_verdict=verdict)
+    except _WriteRefused as exc:
+        return _gate_refused(tool, exc, port=int(port), profile=prof)
+    except Exception as exc:  # fail-closed：闸门自身异常一律拒绝，绝不静默放行
+        return _gate_refused(
+            tool, _WriteRefused("gate_unknown_state", f"{type(exc).__name__}: {exc}",
+                                {"port": int(port), "profile": prof}), port=int(port), profile=prof)
+    return None
+
+
+def _iso2(value: Any) -> str:
+    """t42：国家值归一化为 ISO-2（全名 → 代码）；复用 `core.hot_swap_executor.normalize_cc` 权威实现。"""
+    try:
+        from core.hot_swap_executor import normalize_cc as _ncc
+        return str(_ncc(value) or "").strip().upper()
+    except Exception:
+        try:
+            sys.path.insert(0, ROOT_DIR)
+            from core.hot_swap_executor import normalize_cc as _ncc  # type: ignore
+            return str(_ncc(value) or "").strip().upper()
+        except Exception:
+            return str(value or "").strip().upper()
+
+
+def _listener_proxy_for_port(port: int) -> Optional[str]:
+    """只读取 `in-<port>` 当前映射的 proxy 名（供目标国推断）；不解析任何凭据字段。"""
+    try:
+        import yaml  # type: ignore
+        cfg_path = os.path.join(CONFIG_DIR, "config.yaml")
+        if not os.path.exists(cfg_path):
+            return None
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        for listener in (cfg.get("listeners") or []):
+            if str(listener.get("name")) in (f"in-{int(port)}", f"in-http-{int(port)}"):
+                return listener.get("proxy")
+    except Exception:
+        return None
+    return None
+
+
 @contextlib.contextmanager
 def _bindings_lock():
-    import msvcrt
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BINDINGS_LOCK, "a+b") as lf:
-        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            yield
-        finally:
-            lf.seek(0)
-            msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+    with _aphub_bindings_lock(DATA_DIR, timeout_s=LOCK_TIMEOUT_S):
+        yield
 
 @contextlib.contextmanager
 def _upstreams_lock():
-    import msvcrt
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(UPSTREAMS_LOCK, "a+b") as lf:
-        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            yield
-        finally:
-            lf.seek(0)
-            msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+    with _aphub_upstreams_lock(DATA_DIR, timeout_s=LOCK_TIMEOUT_S):
+        yield
+
+
+def _lock_fail_closed(exc, what: str, tool: str = "") -> Dict[str, Any]:
+    """账本锁超时后的**唯一**失败形态：放弃写入 + 告警，**绝不带锁失败后强写**。
+
+    与「只报不改」原则一致：本次调用不做任何账本改动，把冲突如实报给调用方。
+    """
+    detail = {
+        "code": "lock_timeout",
+        "what": what,
+        "lock": getattr(exc, "path", BINDINGS_LOCK),
+        "timeout_s": getattr(exc, "timeout_s", LOCK_TIMEOUT_S),
+        "tool": tool,
+    }
+    try:
+        from core.autonomy_core import EventStore  # 与其它写点一致：函数内导入
+        EventStore().append("lock_timeout", detail, severity="error")
+    except Exception:
+        pass
+    try:
+        print("[lock_timeout] %s: %s" % (what, exc), file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    msg = ("账本锁被占用，已在 %.0fs 后放弃本次写入（账本未改动）：%s"
+           % (detail["timeout_s"], detail["lock"]))
+    return {"success": False, "ok": False, "error": msg, "bindings_changed": False, **detail}
 
 def get_upstreams_data() -> Dict[str, Any]:
     """读取上游机场与订阅源登记账本。"""
@@ -425,21 +573,36 @@ def tool_auto_rebind_profile(args: Dict[str, Any]) -> Any:
         if not rows:
             return {"success": False, "code": "no_healthy_candidate", "bindings_changed": False, "auto_rebind": True}
         candidate = rows[0]
+        target_port = int(candidate["port"])
+        # t42（P2-19 L1 写点 1/3）：**写前**过拒绝式闸门。契约/死号/跨洲/密度任一不过 → 直接返回，
+        # 不进入读-改-写段（`bindings_changed=False` 且带可判别 `refused_reason`）。
         with _bindings_lock():
             bindings = get_bindings_data()
             previous_port = next((p for p, value in bindings.items() if value.get("profile") == profile), None)
             if dry_run:
-                return {"success": True, "dry_run": True, "profile": profile, "from_port": previous_port, "to_port": candidate["port"], "candidate": candidate, "bindings_changed": False, "paid_calls": False, "auto_rebind": True}
+                return {"success": True, "dry_run": True, "profile": profile, "from_port": previous_port, "to_port": target_port, "candidate": candidate, "bindings_changed": False, "paid_calls": False, "auto_rebind": True}
+            contract = dict(bindings.get(str(target_port)) or {})
+            contract["_target_country"] = str(candidate.get("country") or candidate.get("countryCode") or "").strip().upper()
+            refused = _gate_precheck_bindings("auto_rebind_profile", target_port, profile, contract)
+            if refused is not None:
+                return refused
+            # t35: 契约字段合并。目标口若已带契约，**保留契约**（契约属于"口"的历史归属，
+            # 不因换绑而改变）；只更新绑定动作自身的字段。
+            _target = dict(bindings.get(str(target_port)) or {})
             for port, value in list(bindings.items()):
                 if value.get("profile") == profile:
                     del bindings[port]
-            bindings[str(candidate["port"])] = {
+            _target.update({
                 "profile": profile, "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "note": "agent_auto_rebind", "previous_port": previous_port
-            }
+            })
+            bindings[str(target_port)] = _target
             save_bindings_data(bindings)
-        EventStore().append("binding.auto_rebind", {"profile_hash": __import__("hashlib").sha256(profile.encode()).hexdigest()[:16], "from_port": previous_port, "to_port": candidate["port"], "scene": scene, "country": country}, severity="notice")
-        return {"success": True, "profile": profile, "from_port": previous_port, "to_port": candidate["port"], "candidate": candidate, "bindings_changed": True, "paid_calls": False}
+        EventStore().append("binding.auto_rebind", {"profile_hash": __import__("hashlib").sha256(profile.encode()).hexdigest()[:16], "from_port": previous_port, "to_port": target_port, "scene": scene, "country": country}, severity="notice")
+        return {"success": True, "profile": profile, "from_port": previous_port, "to_port": target_port, "candidate": candidate, "bindings_changed": True, "paid_calls": False}
+    except _AphubLockTimeout as _lt:
+        # t29 契约：拿不到锁即放弃，绝不带锁失败后强写
+        return _lock_fail_closed(_lt, "bindings", tool="auto_rebind_profile")
     except Exception as exc:
         return {"success": False, "code": "auto_rebind_failed", "error": str(exc)[:200], "bindings_changed": False}
 
@@ -453,21 +616,42 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
     if not profile or not port:
         return {"success": False, "error": "必须提供 profile 和 port 参数"}
 
-    with _bindings_lock():
-        bindings = get_bindings_data()
-        old = bindings.get(str(port))
-        if old and old.get("profile") != profile:
-            return {
-                "success": False,
-                "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
-            }
+    try:
+        with _bindings_lock():
+            bindings = get_bindings_data()
+            old = bindings.get(str(port))
+            if old and old.get("profile") != profile:
+                return {
+                    "success": False,
+                    "error": f"端口 {port} 已绑定给环境 [{old.get('profile')}]（{old.get('bound_at', '')}）；如需改绑请先解除原绑定"
+                }
 
-        bindings[str(port)] = {
-            "profile": profile,
-            "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "note": note
-        }
-        save_bindings_data(bindings)
+            # t42（P2-19 L1 写点 2/3）：**写前**过拒绝式闸门（在「端口归属」独占检查之后、
+            # 真正 `save_bindings_data` 之前）。目标国取该口当前映射节点的实测国；
+            # 无契约 → `refuse_missing_contract` 直接拒绝（不得回退观测基线）。
+            contract = dict(old) if isinstance(old, dict) else {}
+            proxy_name = _listener_proxy_for_port(int(port))
+            if proxy_name:
+                idx = load_confidence_index()
+                rec = idx.get(re.sub(r"\D", "", str(proxy_name)) or "") or {}
+                lp = rec.get("lastProbe") or {}
+                contract["_target_country"] = str(lp.get("googleCountry") or lp.get("country") or rec.get("baselineCountry") or "").strip().upper()
+            refused = _gate_precheck_bindings("bind_profile_proxy", int(port), str(profile), contract)
+            if refused is not None:
+                return refused
+
+            # t35: 契约字段合并（不得用整条替换抹掉 expectedCountry/expectedIp/expectedAsn）
+            entry = dict(old) if isinstance(old, dict) else {}
+            entry.update({
+                "profile": profile,
+                "bound_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "note": note,
+            })
+            bindings[str(port)] = entry
+            save_bindings_data(bindings)
+    except _AphubLockTimeout as _lt:
+        # t29 契约：拿不到锁即放弃，绝不带锁失败后强写
+        return _lock_fail_closed(_lt, "bindings", tool="bind_profile_proxy")
 
     return {
         "success": True,
@@ -476,6 +660,7 @@ def tool_bind_profile_proxy(args: Dict[str, Any]) -> Any:
         "socks5_url": f"socks5://127.0.0.1:{port}",
         "message": f"成功锁定环境 [{profile}] 对应出口端口 {port}，维持 IP 粘性。"
     }
+
 
 
 def tool_hot_swap_port_node(args: Dict[str, Any]) -> Any:
@@ -683,33 +868,59 @@ def tool_set_upstream_credential(args: Dict[str, Any]) -> Dict[str, Any]:
     account = (args.get("account") or "").strip()
     extra = args.get("extra") or {}
 
-    with _upstreams_lock():
-        data = get_upstreams_data()
-        sources = data.setdefault("sources", [])
-
-        target = None
-        for s in sources:
-            if s.get("id") == provider_id:
-                target = s
-                break
-
-        if not target:
-            target = {"id": provider_id}
-            sources.append(target)
-
-        target.update({
-            "name": name,
-            "type": upstream_type,
-            "url": url,
-            "token": token,
-            "account": account,
-            "extra": extra,
-            "updated_at": int(time.time()),
-            "status": "active"
-        })
-        save_upstreams_data(data)
-
     masked_tok = (token[:8] + "..." + token[-6:]) if len(token) > 16 else ("***" if token else "")
+    try:
+        with _upstreams_lock():
+            data = get_upstreams_data()
+            sources = data.setdefault("sources", [])
+
+            target = None
+            for s in sources:
+                if s.get("id") == provider_id:
+                    target = s
+                    break
+
+            if not target:
+                target = {"id": provider_id}
+                sources.append(target)
+
+            # t42（P2-19 L1 写点 3/3）：上游凭据写点前置闸。
+            # 只做**形态与规格**校验（不改账号、不改绑定、不读任何既有 token 值）：
+            #   ① 空 token 且该源当前无 token → 拒绝（避免把"凭据被清空"当成一次正常保存）；
+            #   ② 形如 `1//0` / `ya29.` / `eyJhbGciOi`（OAuth refresh token / access token / JWT）
+            #      **绝不允许落进 upstreams.json**（那里只放机场订阅类凭据）→ 一律拒绝并提示改走
+            #      `accounts\*.json` 的金库路径。**绝不打印值，只报前缀与长度**。
+            _existing_tok = str(target.get("token") or "")
+            _looks_like_oauth = token.startswith("1//0") or token.startswith("ya29.") or token.startswith("eyJhbGciOi")
+            if _looks_like_oauth:
+                return _gate_refused(
+                    "set_upstream_credential",
+                    _WriteRefused("credential_shape", "token_形状为 OAuth/JWT 凭据，禁止写入 upstreams.json",
+                                  {"prefix": token[:6], "length": len(token),
+                                   "hint": "Google OAuth 凭据必须走 accounts/*.json 金库路径，不得落在 upstreams.json"}),
+                    provider_id=provider_id, masked_token=masked_tok)
+            if not token and not _existing_tok:
+                return _gate_refused(
+                    "set_upstream_credential",
+                    _WriteRefused("credential_empty", "token 为空且该源无既有凭据：拒绝清空式保存",
+                                  {"provider_id": provider_id}),
+                    provider_id=provider_id)
+
+            target.update({
+                "name": name,
+                "type": upstream_type,
+                "url": url,
+                "token": token,
+                "account": account,
+                "extra": extra,
+                "updated_at": int(time.time()),
+                "status": "active"
+            })
+            save_upstreams_data(data)
+    except _AphubLockTimeout as _lt:
+        # t29 契约：拿不到锁即放弃，绝不带锁失败后强写（不返回 token 相关字段）
+        return _lock_fail_closed(_lt, "upstreams", tool="set_upstream_credential")
+
     return {
         "ok": True,
         "message": f"成功保存上游源 [{name}] 的接入凭据",

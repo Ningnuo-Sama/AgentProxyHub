@@ -230,6 +230,35 @@ def load_nodes_index() -> Dict[int, Dict[str, Any]]:
     except Exception:
         return {}
 
+def load_bound_ports() -> set:
+    """从 bindings.json 解析现役绑定端口。
+
+    端口是 JSON **键**（形如 {"21013": {...}}），历史条目也可能带 "port" 字段；
+    两者都支持，避免只读字段导致保护集为空（2026-10-13 事故根因之一）。
+    """
+    ports = set()
+    try:
+        with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8-sig") as f:
+            content = f.read().strip()
+        if content:
+            for k, v in json.loads(content).items():
+                p = None
+                try:
+                    p = int(str(k).strip())
+                except (TypeError, ValueError):
+                    p = None
+                if p is None and isinstance(v, dict):
+                    try:
+                        p = int(v.get("port"))
+                    except (TypeError, ValueError):
+                        p = None
+                if p:
+                    ports.add(p)
+    except Exception:
+        pass
+    return ports
+
+
 def load_state() -> Dict[str, Any]:
     if os.path.exists(STATE_FILE):
         try:
@@ -295,7 +324,12 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
             rec["baselinePhysicalCountry"] = physical_country
         if not rec.get("stableSince"):
             rec["stableSince"] = now
-        if current_ip != baseline_ip:
+        # 漂移触发：出口 IP 变化，或同一出口 IP 被 Google 改判国别（如 US→UA 且 IP 未变）。
+        baseline_gcc = (rec.get("baselineGoogleCountry") or "").strip().upper()
+        google_cc_changed = (google_country not in ("", "FAIL", "UNKNOWN")
+                             and baseline_gcc not in ("", "FAIL", "UNKNOWN")
+                             and google_country != baseline_gcc)
+        if current_ip != baseline_ip or google_cc_changed:
             drift = classify_drift(baseline_cc, effective_cc)
             if drift == "unknown":
                 rec.setdefault("driftEvents", []).append({"t": now, "from": baseline_ip, "to": current_ip,
@@ -320,7 +354,9 @@ def update_record(port: int, probe: Dict[str, Any], node: Optional[Dict[str, Any
                 rec["stableSince"] = now
                 rec["driftPenalty"] = 0
             # unknown 只记录证据，不触发跨洲禁用，也不改变有效国家基线。
-            if drift != "unknown":
+            # 仅 same_country 允许把漂移后的国家吸收为新基线；跨洲/同大区跨国漂移保留
+            # 原基线，使该端口持续被标记为漂移（跨洲仍保留上面的 vetoUntil 禁用逻辑）。
+            if drift == "same_country":
                 candidate_cc = effective_cc or baseline_cc
                 # 锁区国家（中国／香港／澳门）绝不允许被固化为基线国：
                 # 否则自愈会把澳门当成“同国”候选，持续把端口钉死在受限出口上。
@@ -369,13 +405,7 @@ def select_ports(scope: str, explicit: List[int]) -> List[int]:
     # bound：现役绑定端口（bindings.json）+ S/A 级静态节点
     ports = set()
     try:
-        with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8-sig") as f:
-            content = f.read().strip()
-            if content:
-                for v in json.loads(content).values():
-                    p = v.get("port") if isinstance(v, dict) else None
-                    if p:
-                        ports.add(int(p))
+        ports |= load_bound_ports()
     except Exception:
         pass
     for p, n in nodes.items():
@@ -410,13 +440,7 @@ def run(scope: str, explicit: List[int], max_workers: int = 8, auto_heal: bool =
     if auto_heal:
         bound_ports = set()
         try:
-            with open(os.path.join(DATA_DIR, "bindings.json"), "r", encoding="utf-8-sig") as f:
-                content = f.read().strip()
-                if content:
-                    for v in json.loads(content).values():
-                        p = v.get("port") if isinstance(v, dict) else None
-                        if p:
-                            bound_ports.add(int(p))
+            bound_ports |= load_bound_ports()
         except Exception:
             pass
         # 兼容 Antigravity 账号粘性保护端口段
@@ -426,15 +450,25 @@ def run(scope: str, explicit: List[int], max_workers: int = 8, auto_heal: bool =
         for p in ports:
             if p in protect_ports:
                 rec = state["ports"].get(str(p), {})
-                if rec.get("vetoed") and rec.get("vetoReason") in ("sent_to_china", "offline"):
+                # 触发范围：送中/离线一票否决（原有语义不变），或最新漂移分级为跨洲/同大区跨国漂移
+                heal_reason = (rec.get("vetoReason")
+                               if (rec.get("vetoed") and rec.get("vetoReason") in ("sent_to_china", "offline"))
+                               else "")
+                last_drift = ((rec.get("driftEvents") or [{}])[-1]).get("kind") or ""
+                if not heal_reason and last_drift in ("cross_continent", "cross_country_same_region"):
+                    heal_reason = f"drift_{last_drift}"
+                if heal_reason:
                     # 防震荡冷却：与 scan_and_heal_all 同样的 1 小时门禁，避免失败端口被巡检反复换绑横跳
                     last_healed = float(rec.get("lastHealedTime") or 0.0)
                     if time.time() - last_healed < 3600.0:
                         continue
-                    print(f"[confidence-heal] 发现保护端口 {p} 被否决 ({rec.get('vetoReason')})，正在触发自动热替换自愈...")
+                    print(f"[confidence-heal] 发现保护端口 {p} 需自愈 ({heal_reason})，正在触发自动热替换自愈...")
                     try:
-                        from .hot_swap_executor import auto_heal_port
-                        heal_res = auto_heal_port(p, reason=rec.get("vetoReason"))
+                        try:  # 包内导入（MCP / 调度器调用路径）
+                            from .hot_swap_executor import auto_heal_port
+                        except ImportError:  # 允许以脚本方式直接运行
+                            from hot_swap_executor import auto_heal_port
+                        heal_res = auto_heal_port(p, reason=heal_reason)
                         if heal_res.get("ok"):
                             print(f"[confidence-heal] 端口 {p} 成功自愈热替换为 {heal_res.get('new_proxy')} ({heal_res.get('verified_country')})")
                             # 立即重测该端口并更新记录

@@ -18,6 +18,14 @@ function Get-RunFile([string]$name) {
         if (Test-Path -LiteralPath $p) { return $p }
     }
     return (Join-Path $Dir $name)
+
+# ---- P2-21 / t44：端口级对齐账本 + 自动重建显式开关（独立模块，可单独 dot-source 自验）----
+$script:LedgerModule = Join-Path $PSScriptRoot 'panel-ledger.ps1'
+if (Test-Path -LiteralPath $script:LedgerModule) {
+    . $script:LedgerModule
+} else {
+    Write-Warning 'panel-ledger.ps1 缺失 ⇒ 端口对齐列与自动重建开关不可用'
+}
 }
 function Get-CoreFile([string]$name) {
     $p = Join-Path $Dir "core\$name"
@@ -687,6 +695,36 @@ $script:HttpFormats = @('http://')
                   </GridViewColumn.CellTemplate>
                 </GridViewColumn>
                 <GridViewColumn Header="出口 IP" Width="140" DisplayMemberBinding="{Binding ExitIp}"/>
+                <GridViewColumn Header="出口IP(账本)" Width="132" DisplayMemberBinding="{Binding LedgerIp}"/>
+                <GridViewColumn Header="判国(Google)" Width="118">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding GoogleVerdict}"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="账号/密度" Width="82">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding DensityText}" Foreground="{Binding DensityBrush}" FontWeight="SemiBold" ToolTip="{Binding LedgerNote}"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="契约/退用" Width="168">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding LedgerContract}" Foreground="{Binding ContractBrush}" ToolTip="{Binding LedgerNote}"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
+                <GridViewColumn Header="归属/冻结" Width="196" DisplayMemberBinding="{Binding LedgerOwner}"/>
+                <GridViewColumn Header="探龄" Width="150">
+                  <GridViewColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding LedgerFreshText}" Foreground="{Binding LedgerFreshBrush}" ToolTip="{Binding LedgerNote}"/>
+                    </DataTemplate>
+                  </GridViewColumn.CellTemplate>
+                </GridViewColumn>
               </GridView>
             </ListView.View>
           </ListView>
@@ -1414,12 +1452,18 @@ function Render {
 
 function Update-KernelUi {
     $run = Test-Kernel
+    # P2-21 / t44：主面板极简一行（后端真实账本，60s 缓存，避免每 12s 解析 250KB 账本）
+    if (-not $script:LedgerLineAt -or ((Get-Date) - $script:LedgerLineAt).TotalSeconds -gt 60) {
+        try { $script:LedgerLine = (Get-PortLedgerSummary).Text; $script:LedgerLineAt = Get-Date }
+        catch { $script:LedgerLine = '端口账本读取失败：' + $_.Exception.Message }
+    }
+    $ledLine = if ($script:LedgerLine) { ' · ' + $script:LedgerLine } else { '' }
     if ($run) {
         $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#5FD08A'))
-        $KernelText.Text = '内核运行中 · 蜂窝 21001-21080 · 星辰 22001-22045 · 智能聚合 39999'
+        $KernelText.Text = '内核运行中 · 蜂窝 21001-21080 · 星辰 22001-22045 · 智能聚合 39999' + $ledLine
     } else {
         $Dot.Fill = [Windows.Media.SolidColorBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#E08A8A'))
-        $KernelText.Text = '内核未运行 · 点「启动内核」'
+        $KernelText.Text = '内核未运行 · 点「启动内核」' + $ledLine
     }
     if ($CockpitState) {
         $busy = [bool]$script:CoreAction
@@ -1499,6 +1543,11 @@ function Full-Reload([switch]$Probe) {
 }
 
 function Sync-FromHoneycomb {
+    # P2-21 / t44：fail-closed 闸门 —— 无论谁调用，自动重建＝关即拒绝（不改配置、不热重载）
+    if (-not (Test-AutoRebuildAllowed)) {
+        Write-PanelEvent 'auto-rebuild-blocked' '自动重建＝关（映射冻结）⇒ Sync-FromHoneycomb 被拒（fail-closed）；未改配置、未热重载'
+        return
+    }
     $StatusText.Text = '检测到蜂窝订阅已刷新，正在同步（重新生成配置 + 热重载内核）…'
     Pump
     $r = Invoke-Script 'gen-config.ps1'
@@ -1625,6 +1674,7 @@ function Get-BindingRows {
 }
 
 function New-GuardRow([int]$Port, $probe) {
+    $led = if ($script:PortLedger) { $script:PortLedger[[int]$Port] } else { $null }
     $meta = $script:GuardMeta[$Port]
     $brand = if ($Port -lt 22000) { '蜂窝' } else { '星辰' }
     $country = if ($meta -and $meta.country) { $meta.country } else { '—' }
@@ -1654,6 +1704,17 @@ function New-GuardRow([int]$Port, $probe) {
         RiskBrush   = $rbr
         Status      = $status
         StatusBrush = $sbr
+        # ---- P2-21 / t44 账本对齐列（port 为键；判国/密度/契约/冻结/探龄全部来自后端账本）----
+        LedgerIp      = if ($led) { $led.ExitIp } else { '—' }
+        GoogleVerdict = if ($led) { $led.GoogleCountry } else { '—' }
+        LedgerContract = if ($led) { ('' + $led.ExpectedCountry + ' / ' + $led.RetiredText) } else { '—' }
+        ContractBrush  = if ($led -and $led.Retired) { $GBrRed } else { $GBrGray }
+        DensityText   = if ($led) { $led.DensityText } else { '—' }
+        DensityBrush  = if ($led -and ($led.DensityOver -or $led.IpDensityOver)) { $GBrRed } elseif ($led -and $led.LiveAccounts -gt 0) { $GBrGreen } else { $GBrGray }
+        LedgerOwner   = if ($led) { ('' + $led.Owner + ' · ' + $led.FreezeText) } else { '—' }
+        LedgerFreshText  = if ($led) { $led.FreshText } else { '—' }
+        LedgerFreshBrush = if ($led -and $led.Fresh) { $GBrGreen } else { $GBrGray }
+        LedgerNote    = if ($led) { ('proxy=' + $led.ProxyName + '[' + $led.ProxySrc + '] · 实测IP=' + $led.ExitIp + ' (物理 ' + $led.Physical + ') · 实测IP密度=' + $led.MeasuredIpDensity + ' · 探针=' + $led.ProbeAt + ' · 源=' + $led.ProbeSrc + ' · 订阅源名=' + $led.OrigName) } else { '' }
         ExitIp      = $exitIp
         Alive       = [bool]($probe -and $probe.CfOk -and $probe.GoogleOk)
         Probed      = [bool]$probe
@@ -1663,6 +1724,14 @@ function New-GuardRow([int]$Port, $probe) {
 }
 
 function Initialize-Guard {
+    # P2-21 / t44：端口级对齐账本（唯一数据源 = data\l0_state.json 等后端账本，非节点名/池名）
+    $script:PortLedger = @{}
+    try {
+        foreach ($r in @(Get-PortLedger)) { $script:PortLedger[[int]$r.Port] = $r }
+        $sum = Get-PortLedgerSummary
+        Write-PanelEvent 'ledger-loaded' ('端口账本 ' + $script:PortLedger.Count + ' 口 | ' + $sum.Text)
+        if ($GuardStatusText) { $GuardStatusText.Text = $sum.Text }
+    } catch { Write-PanelEvent 'ledger-error' $_.Exception.Message }
     $script:GuardMeta  = Get-GuardMeta
     $script:GuardBind  = @(Get-BindingRows)
     $script:GuardBound = @($script:GuardBind | Where-Object { $_.Port -gt 0 } | Select-Object -ExpandProperty Port -Unique)
@@ -2275,19 +2344,16 @@ $TxtSearch.Add_GotFocus({ if ($TxtSearch.Text -eq '搜索地区 / 城市 / 端�
 $TxtSearch.Add_TextChanged({ if ($script:Nodes.Count) { Invoke-Debounced 'MainSearch' 300 { Render } } })
 
 # 自动同步：每 12 秒检查蜂窝订阅 profile 是否被刷新
+#   P2-21 / t44（P-1 收口）：自动重建 = **显式开关，默认关**（data\auto_rebuild_state.json）。
+#     开关关 ⇒ 订阅刷新只记录日志与状态文案，**绝不** 重新生成配置 / 热重载；端口映射保持不变。
+#     开关状态同时显示在主面板状态行（Update-KernelUi 追加的「映射冻结 …」段）。
 $script:Timer = New-Object Windows.Threading.DispatcherTimer
-$script:Timer.Interval = [TimeSpan]::FromSeconds(12)
+$script:Timer.Interval = [TimeSpan]::FromHours(12)   # P2-34（2026-10-17 用户要求）：订阅档检查 12 秒 → 12 小时（用户刷新订阅的频率是"几天一次"；本检查只读本地文件、0 出网流量，降频纯为减负）
 $script:Timer.Add_Tick({
     try {
         $info = Get-ProfileInfo
-        if ($info -and $info.Write) {
-            if ($script:LastWrite -and $info.Write -ne $script:LastWrite) {
-                $script:LastWrite = $info.Write
-                Sync-FromHoneycomb
-            } elseif (-not $script:LastWrite) {
-                $script:LastWrite = $info.Write
-            }
-        }
+        $res = Invoke-SubscriptionRefreshCheck -Info $info -LastWrite ([ref]$script:LastWrite) -Rebuild { Sync-FromHoneycomb } -Log { param($k, $m) Write-PanelEvent $k $m }
+        if ($res -and $res.Text) { $StatusText.Text = $res.Text }
         [void](Update-KernelUi)
     } catch {
         Write-PanelEvent 'sync-error' $_.Exception.Message
