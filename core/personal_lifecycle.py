@@ -1,4 +1,14 @@
-"""个人出海生命周期；只操作独立内核，不触碰业务内核。"""
+"""个人出海生命周期；只操作独立内核，不触碰业务内核。
+
+2026-10-19 起：个人出海（APH-Personal TUN）在产品层面下线。
+与 ClaudeSafeTun 的 TUN 并存会导致双 TUN 争抢默认路由与 DNS，
+表现为全机网络崩坏、Claude 出口泄漏到第三方国家。
+
+- personal/config.yaml 的 tun.enable 已置 false；
+- personal-route.json 的 desired_on 固定 false；
+- start()/toggle() 在此硬性拒绝，不再有"自动拉起出海"的可能；
+- stop() 保留，用于清理任何历史残留。
+"""
 import subprocess
 import time
 from pathlib import Path
@@ -7,6 +17,23 @@ from .personal_route_state import set_desired
 
 PERSONAL_DIR = Path(r'D:\Program Files\AgentProxyHub\personal')
 PERSONAL_CONFIG = PERSONAL_DIR / 'config.yaml'
+
+# 下线开关：产品层永久禁用个人出海。若将来要恢复，必须同时
+# 1) 改回 False，2) 把 personal/config.yaml 的 tun.enable 置 true，
+# 3) 确认 ClaudeSafeTun 的 tun.enable 为 false（两者不可同时为 true）。
+PERSONAL_TUN_RETIRED = True
+
+
+def _refuse():
+    """产品已下线个人出海：所有开启路径统一拒绝。"""
+    try:
+        set_desired(False)
+    except Exception:
+        pass
+    return {'ok': False, 'code': 'personal_tun_retired',
+            'label': '个人出海已下线',
+            'reason': '个人出海 TUN 与 ClaudeSafeTun 并存会导致双 TUN 争抢路由/DNS，'
+                      '已于 2026-10-19 在产品层面下线。如需恢复请改 PERSONAL_TUN_RETIRED。'}
 
 
 def _running():
@@ -45,7 +72,9 @@ def status(force=False):
 
 
 def toggle():
-    """在同一可重入跨进程锁内决定方向、执行、确认。"""
+    """产品已下线个人出海：一律拒绝，不再切换。"""
+    if PERSONAL_TUN_RETIRED:
+        return _refuse()
     with control_lock():
         before = status(force=True)
         if not before['known']:
@@ -62,6 +91,8 @@ def _desired():
 
 
 def start():
+    if PERSONAL_TUN_RETIRED:
+        return _refuse()
     with control_lock():
         if is_halted():
             return {'ok': False, 'code': 'manual_halt', 'label': '停止內核'}
