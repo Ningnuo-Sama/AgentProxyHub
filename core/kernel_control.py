@@ -15,22 +15,14 @@ def control_lock():
 
 HALT_FILE = Path(r'D:\ProgramData\AgentProxyHub\control\manual-halt.json')
 OWNED_EXE = r'D:\Program Files\AgentProxyHub\bin\mihomo.exe'
-PERSONAL_EXE = r'D:\Program Files\AgentProxyHub\personal\mihomo.exe'
-
-
-def stop_personal_kernel():
-    """日常关闭出海：只停个人内核，不设总急停、不改系统代理或业务进程。"""
-    with control_lock():
-        command = _stop_command((PERSONAL_EXE,))
-        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
-                                capture_output=True, timeout=20)
-        return {'ok': result.returncode == 0, 'business_kernel_changed': False,
-                'code': 'personal_kernel_stopped' if result.returncode == 0 else 'personal_stop_failed'}
+# 个人出海内核已于 2026-10-19 移除（personal/ 目录与 core/personal_*.py 已删）。
+# 个人出海的 TUN 会与 ClaudeSafeTun 争抢默认路由与 DNS，导致全机网络崩坏；
+# 实际出海走蜂窝（FlClash），AgentProxyHub 只提供 125 个业务 SOCKS/HTTP 端口。
 
 
 def _stop_command(paths):
     # 路径只由模块内常量提供，调用方不能传任意进程名。
-    allowed = {OWNED_EXE, PERSONAL_EXE}
+    allowed = {OWNED_EXE}
     if not paths or any(path not in allowed for path in paths):
         raise ValueError('unowned_executable')
     literals = ','.join("'" + path + "'" for path in paths)
@@ -75,7 +67,7 @@ def emergency_stop():
 
 def _emergency_stop_locked():
     # 白名单按 executable 精确匹配，绝不 taskkill /im mihomo.exe。
-    command = _stop_command((OWNED_EXE, PERSONAL_EXE)) + r'''
+    command = _stop_command((OWNED_EXE,)) + r'''
 # 用户主动急停：取消当前用户系统代理及PAC；不修改第三方网卡、DNS和路由。
 Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0
 Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name AutoConfigURL -Value ''

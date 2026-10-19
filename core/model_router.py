@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""统一文本模型路由：本地 deepseek-v4.1 主战、AT 网关 Gemini 次之、GLM 兜底、GPT 最高事态。
+"""统一文本模型路由：按 policy 的 `provider` 选传输，AT 网关 Gemini 主战、GLM 兜底、GPT 最高事态。
 
-P2-4（2026-10-17）：主战模型改为**本地 deepseek-v4.1**（`http://127.0.0.1:2666/v1`，
-模型 `cn:deepseek-v4.1-flash`，与用户「本地的你用的这个 deepseek4.1」同源）。
+P2-36（2026-10-17）：**修掉「daily 那层传输写死 local」的半成品**。
+  上一轮把 `model_policy.json` 的 `daily` 改成了 `antigravity @ 127.0.0.1:8045`，
+  但 `complete()` 仍按 `("local", daily.model)` 取凭据 ⇒ 拿 huaiyuan 的 key 打 AT 网关，
+  实测返回 `Invalid token`，用户侧表现为「驻场工程师答不了话」。
+  现在每层都按该条目自己的 `provider` 经 `_transport_for()` 选传输（见映射表）。
+
 凭据只从环境变量 / DPAPI 金库 / DSH 运行时凭据文件短暂读取，不返回、不落盘、不打印；
 调用摘要写入脱敏 usage ledger。媒体生成不在本模块范围内，媒体任务交给 Flow-Tools。
 """
@@ -40,6 +44,11 @@ def _secret_by_name(fragment: str, *, preferred_name: str | None = None) -> byte
 def _credential(kind: str) -> tuple[str, str]:
     if kind in ("local", "local_huaiyuan"):
         return _local_credential()
+    if kind == "openviking":
+        raw = _secret_by_name("openviking").decode("utf-8", "replace").splitlines()
+        base = "http://127.0.0.1:1935/v1"
+        key = raw[0].strip() if raw else ""
+        return base, key
     if kind == "gemini":
         raw = _secret_by_name("gemini3.8flash").decode("utf-8", "replace").splitlines()
         base = (raw[0].strip() if raw else "") or "http://127.0.0.1:8045"
@@ -130,11 +139,42 @@ def _provider(kind: str, model: str, messages: list[Mapping[str, str]]) -> dict[
     return {"ok": True, "provider": kind, "model": model, "text": message.get("content", ""), "usage": response.get("usage", {})}
 
 
+def _transport_for(provider: str) -> str:
+    """把 policy 条目的 `provider` 映射到传输类型（P2-36：**不再把 daily 写死为 local**）。
+
+    映射表（t58 实测四类 provider）：
+      local_huaiyuan → local     （本地 deepseek-v4.1 @ 127.0.0.1:2666）
+      antigravity    → gemini    （本地 AT 网关 @ 127.0.0.1:8045）
+      zhipu          → glm       （智谱 GLM，外网）
+      aicost         → gpt       （AICost GPT-6.1-SOL，付费）
+
+    未知 provider ⇒ **fail-closed 抛 ValueError**，由降级链的 except 捕获落到下一层，
+    绝不静默按 local 猜（上一轮的 bug 正是"猜 local"导致凭据/端点错配）。
+    """
+    table = {
+        "local_huaiyuan": "local",
+        "local": "local",
+        "openviking": "openviking",
+        "ov": "openviking",
+        "antigravity": "gemini",
+        "gemini": "gemini",
+        "zhipu": "glm",
+        "glm": "glm",
+        "aicost": "gpt",
+        "gpt": "gpt",
+    }
+    kind = table.get(str(provider or "").strip().lower())
+    if not kind:
+        raise ValueError(f"unknown_provider:{provider}")
+    return kind
+
+
 def complete(prompt: str, *, urgency: str = "daily", system: str | None = None) -> dict[str, Any]:
     """执行一次非媒体文本任务。
 
     P2-4 降级链（写进 `config/model_policy.json` 的 `routing.chain`，此处兜底同值）：
-      daily  → 本地 deepseek-v4.1（127.0.0.1:2666，loopback，近零流量）
+      daily  → 按 `daily.provider` 选传输（P2-36 前写死 local，导致 daily=antigravity 时
+               拿 huaiyuan 凭据打 AT 网关 ⇒ `Invalid token`）
       gemini → 本地 AT 网关（127.0.0.1:8045，DPAPI 凭据）
       fallback → 智谱 GLM（外网）
       critical → AICost GPT-6.1-SOL（付费，需人工确认）
@@ -147,9 +187,13 @@ def complete(prompt: str, *, urgency: str = "daily", system: str | None = None) 
     if urgency == "critical":
         chain = [("gpt", policy["highest_urgency"]["model"])]
     else:
+        # P2-36：**按 policy 条目的 provider 选传输**，不再把 daily 硬编码成 local。
+        daily = policy.get("daily") or {}
+        gemini_entry = policy.get("gemini") or {}
         chain = [
-            ("local", policy["daily"]["model"]),
-            ("gemini", (policy.get("gemini") or {}).get("model") or policy["daily"].get("legacy_model") or "gemini-3.8-flash-tiered"),
+            (_transport_for(daily.get("provider")), daily.get("model")),
+            (_transport_for(gemini_entry.get("provider") or "antigravity"),
+             gemini_entry.get("model") or daily.get("legacy_model") or "gemini-3.8-flash-tiered"),
             ("glm", policy["fallback"]["model"]),
         ]
     errors = []
@@ -169,16 +213,23 @@ def status() -> dict[str, Any]:
     """只报「配置是否齐备」，**不返回任何凭据内容**（只给 sha256 前 12 位与长度）。"""
     policy = _policy()
     rows = []
-    for key, kind in (("daily", "local"), ("gemini", "gemini"), ("fallback", "glm"), ("highest_urgency", "gpt")):
+    # P2-36：transport 也按各条目自己的 provider 推导，不再写死 daily→local。
+    for key in ("daily", "gemini", "fallback", "highest_urgency"):
         item = policy.get(key) or {}
         try:
+            kind = _transport_for(item.get("provider"))
+        except ValueError:
+            kind = "local"
+        try:
             base, credential = _credential(kind)
-            rows.append({"role": key, "provider": item.get("provider"), "model": item.get("model"),
+            rows.append({"role": key, "provider": item.get("provider"), "transport": kind,
+                         "model": item.get("model"),
                          "base_url": item.get("base_url") or base, "configured": bool(credential),
                          "credential_sha256_12": hashlib.sha256(credential.encode("utf-8")).hexdigest()[:12] if credential else None,
                          "credential_len": len(credential)})
         except Exception as exc:
-            rows.append({"role": key, "provider": item.get("provider"), "model": item.get("model"),
+            rows.append({"role": key, "provider": item.get("provider"), "transport": kind,
+                         "model": item.get("model"),
                          "configured": False, "error": type(exc).__name__})
     routing = policy.get("routing") or {}
     return {"ok": True, "models": rows, "chain": routing.get("chain") or ["daily", "gemini", "fallback"],

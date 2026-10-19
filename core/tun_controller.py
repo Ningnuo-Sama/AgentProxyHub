@@ -3,7 +3,7 @@ import json
 import urllib.request
 import urllib.error
 from pathlib import Path
-from core.personal_route import runtime_controller_auth
+from core.controller_auth import runtime_controller_auth
 
 RUNTIME_CONFIG = Path(r'D:\Program Files\AgentProxyHub\config\config.yaml')
 
@@ -40,7 +40,7 @@ class TunController:
     def reload_disabled_snapshot(self, snapshot_path):
         """控制器仍存活时加载已核对的关闭TUN快照；只接受私有回退目录。"""
         import yaml
-        from core.personal_route import fixed_listener_map
+        from core.controller_auth import fixed_listener_map
         path = Path(snapshot_path).resolve()
         root = Path(r'D:\ProgramData\AgentProxyHub\backups').resolve()
         if not path.is_relative_to(root):

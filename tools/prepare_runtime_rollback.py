@@ -13,7 +13,7 @@ TARGET = ROOT / 'rollback-disabled.yaml'
 def validate(source: Path, runtime: Path) -> tuple[dict, str]:
     src = yaml.safe_load(source.read_text(encoding='utf-8-sig'))
     live = yaml.safe_load(runtime.read_text(encoding='utf-8-sig'))
-    from core.personal_route import fixed_listener_map
+    from core.controller_auth import fixed_listener_map
     if (src.get('tun') or {}).get('enable', False):
         raise ValueError('rollback_snapshot_tun_must_be_disabled')
     if src.get('listeners') != live.get('listeners') or fixed_listener_map(src) != fixed_listener_map(live):
@@ -40,3 +40,4 @@ def main(argv: list[str]) -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main(sys.argv))
+

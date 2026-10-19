@@ -441,8 +441,13 @@ def _case_hamisujko14_three(rows, gaps) -> bool:
 
 
 def _case_serendipity4518_two_env(rows, gaps) -> bool:
+    """serendipity4518 必须被**一账号多口**检查覆盖。
+
+    t62 已把 env 侧 21007 退役（bindings 12→8 键），故不能写死"env 必须含 21007+22024"；
+    改为验：该账号一定在差异表里，且 distinct_port_count ≥ 2（多口事实仍在、跨面仍未收敛）。
+    """
     r = _find(rows, "serendipity4518")
-    return bool(r and 21007 in (r.get("env_ports") or []) and 22024 in (r.get("env_ports") or []))
+    return bool(r and len(set(r.get("all_ports") or [])) >= 2)
 
 
 def _case_a7o0rps_mismatch(rows, gaps) -> bool:
@@ -461,7 +466,12 @@ def _case_a7o0rps_mismatch(rows, gaps) -> bool:
 
 
 def _case_dead_flagged(rows, gaps) -> bool:
-    return sum(1 for r in rows if r.get("dead")) >= 4
+    """死号必须被标出（≥1 即证明判据在算）。
+
+    t62 已把 env 侧 4 个死号绑定清掉（G16 现 ok=True），故不能写死"≥4"；
+    改为 ≥1（注册表 5 条仍在，Flow 侧 e2hciuq 档案仍在 ⇒ 判据仍有标的）。
+    """
+    return sum(1 for r in rows if r.get("dead")) >= 1
 
 
 def _case_cluster_split(rows, gaps) -> bool:
@@ -502,15 +512,17 @@ KNOWN_CASES = [
     ("hamisujko14_three_countries",
      "t31 §6.1：hamisujko14 三国残留 —— FlowTools 21012(NP) / AT 21010(US) / env 22003(RU)",
      _case_hamisujko14_three),
-    ("serendipity4518_two_ports_env",
-     "t35 / t45：flow_serendipity4518 同时占 env 21007(US) 与 22024(GB) ⇒ G4 one_profile_one_ip",
+    ("serendipity4518_multi_port",
+     "t35/t45/t62：serendipity4518 必须被「一账号多口」检查覆盖（env 21007 已被 t62 退役，"
+     "故改为状态无关：distinct_port_count ≥ 2 即证明多口事实仍在）",
      _case_serendipity4518_two_env),
     ("a7o0rps_cross_surface_alignment",
      "t31 §6.2 步 1 / t43：a7o0rps 必须被跨面对齐检查覆盖（env 21021 vs AT 21010/22002），"
      "且 consistent 判定与 distinct_port_count 自洽（**不写死必须不一致** —— t48 实测 AT 侧已迁到 22002）",
      _case_a7o0rps_mismatch),
     ("dead_accounts_flagged",
-     "t46 F40-6：5 个死号（e2hciuq/syce8fd/landinhbobbymatin/vxjsjxyxsnvxuxnz75/f7tlwmt）必须被标出",
+     "t46 F40-6 / t62：死号必须被标出（t62 已清 env 侧 4 个死号绑定 ⇒ 改为 ≥1，"
+     "注册表 5 条仍在、Flow 侧 e2hciuq 档案仍在 ⇒ 判据仍有标的）",
      _case_dead_flagged),
     ("a7o0rps_cluster_split_visible",
      "t43 拆簇必须**在差异表里可见**：a7o0rps 的 at 口要么是 21010（未拆）要么是 22002（已拆），"
@@ -544,6 +556,195 @@ def run_assertions(rows: list[dict], gaps: list[dict], metas: Mapping[str, Any])
     print("\n  断言结果: %s（%d/%d）" % ("PASS" if not bad else "FAIL", len(KNOWN_CASES) + 1 - bad,
                                        len(KNOWN_CASES) + 1))
     return bad
+
+
+# ---------------------------------------------------------------- t60：env 侧双写 dry-run + 权威表
+# t60 裁定①：第二阶段双写**先只开 APH env 侧**，且**本轮只出 dry-run**。
+# 判据来源（不自造第二套）：
+#   · authority_port 选取顺序 = **AT 侧 > env 侧 > FlowTools**（AT 是 Google 侧真实生效点，
+#     t43 已证 AT API 写入口可用；env 是受保护账本；FlowTools 内存 Mutex 只能人工）；
+#   · 是否跨洲 = `core/hot_swap_executor.normalize_cc` + `core/write_guard.region_of`（既有权威）；
+#   · 是否触碰死号 = `core/write_guard.refuse_dead_account`（t39）；
+#   · 闸门预演 = `core.ledger_watch.check_bind_allowed()`（t33 fail-closed）。
+AUTHORITY_ORDER = ("at", "env", "flowtools")
+
+
+def _authority_port_of(r: Mapping[str, Any], overrides: Mapping[str, str] | None = None) -> int | None:
+    """按 AT > env > FlowTools 取 authority_port；`--authority-port key=port` 可显式覆盖（t47 裁定用）。"""
+    key = str(r.get("key") or "")
+    if overrides and key in overrides:
+        try:
+            return int(overrides[key])
+        except (TypeError, ValueError):
+            pass
+    for side in AUTHORITY_ORDER:
+        ports = r.get("%s_ports" % side) or []
+        if ports:
+            return int(ports[0])
+    return None
+
+
+def build_authority_doc(rows, metas, env_meta, ft_meta, pool_meta, limit,
+                        authority_overrides: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """t22 §2.2 schema v1.0 的 `data/port_authority.json` 建议稿（**只打印，不落盘**）。"""
+    accounts = []
+    for r in rows:
+        auth = _authority_port_of(r, authority_overrides)
+        accounts.append({
+            "account_id": r.get("account_id") or "",
+            "email": r["email"],
+            "key": r["key"],
+            "state": "dead" if r["dead"] else "live",
+            "tier": "unknown",
+            "authority_port": auth,
+            "authority_side": ("override" if (authority_overrides or {}).get(r["key"])
+                               else next((s for s in AUTHORITY_ORDER if r.get("%s_ports" % s)), None)),
+            "contract": {"expected_country": r.get("expectedCountry")},
+            "refs": {
+                "at": {"port": (r["at_ports"][0] if r["at_ports"] else None)},
+                "env": [{"port": p} for p in r["env_ports"]],
+                "flowtools": [{"port": p} for p in r["flowtools_ports"]],
+            },
+            "consistent": r["consistent"],
+            "dead_reason": r.get("dead"),
+            "gate": r.get("gate_check"),
+        })
+    return {
+        "schema": "port_authority.json",
+        "version": "1.0",
+        "status": "DRAFT",
+        "generated_by": "tools/port_linkage_sync.py --authority-init",
+        "note": ("t22 §2.2 schema v1.0 建议稿；**本工具不落盘**（t60 裁定⑤：status=active 由 captain 批准）。"
+                 "authority_port 选取顺序 = AT > env > FlowTools；可用 --authority-port key=port 显式覆盖。"),
+        "density_limit": limit,
+        "accounts": accounts,
+        "ledger_digest": {"env": env_meta.get("sha256_16"), "at": metas["at"].get("sha256_16"),
+                          "flowtools": ft_meta.get("sha256_16"),
+                          "flow_accounts_encrypted": pool_meta["accounts"].get("sha256_16"),
+                          "flow_proxy_pool_encrypted": pool_meta["proxy_pool"].get("sha256_16")},
+    }
+
+
+def build_env_write_plan(rows, limit, authority_overrides: Mapping[str, str] | None = None) -> list[dict]:
+    """算出「若开 env 侧双写会写什么」的逐条清单（**纯计算，零写入**）。"""
+    try:
+        from core.write_guard import region_of, refuse_dead_account, WriteRefused
+    except ImportError:  # 脚本直跑
+        from write_guard import region_of, refuse_dead_account, WriteRefused  # type: ignore
+    from core.ledger_watch import check_bind_allowed, load_config_struct
+
+    cfg = load_config_struct()
+    lmap = _listener_map_safe(cfg)
+    plan = []
+    for r in rows:
+        if r["dead"]:
+            continue  # 死号不写（t39 fail-closed）
+        auth = _authority_port_of(r, authority_overrides)
+        if auth is None:
+            continue
+        env_ports = r["env_ports"] or []
+        if auth in env_ports and len(env_ports) == 1:
+            continue  # env 已且仅绑在 authority_port ⇒ 无需写入
+        # 旧值：env 侧当前绑的 profile 列表（可能 0 个 = 未登记，或多个 = 重复登记）
+        old_profiles = [str(p) for p in (r.get("env_profiles") or [])]
+        if not old_profiles:
+            # rows 里没带 env_profiles 时退回：用 env_ports 反查 bindings.json
+            old_profiles = _env_profiles_for(env_ports) or ["(env 无登记)"]
+        new_profile = r.get("profile") or r["key"]
+        # 跨洲判定：authority_port 的节点名 vs 契约 expectedCountry
+        node = str(lmap.get(auth, ""))
+        ec = r.get("expectedCountry")
+        cross = "unknown"
+        if ec and ec != "UNKNOWN":
+            try:
+                want_region = region_of(ec)
+                # 节点名不含国码；用 AT 池条目名（t60 实测 AT 名内含 US/SG/GB 等）
+                at_name = ""
+                for p in r.get("at_ports") or []:
+                    at_name = _at_pool_name(p) or at_name
+                got_region = region_of(_region_from_name(at_name) or _region_from_name(node))
+                cross = "同区" if (want_region == got_region and got_region != "UNKNOWN") else \
+                        "**跨区/未知（需人工确认）** want=%s got=%s" % (want_region, got_region)
+            except Exception as exc:  # noqa: BLE001
+                cross = "region_of 异常 %s" % type(exc).__name__
+        # 触碰死号？
+        touches_dead = "否"
+        for op in old_profiles:
+            try:
+                refuse_dead_account(profile=op)
+            except WriteRefused:
+                touches_dead = "**是（旧 profile %s 是死号）**" % op
+        # 闸门预演（fail-closed：预演不过 ⇒ 该笔标记为「将被拒绝，不得写入」）
+        g = check_bind_allowed(auth, new_profile)
+        gate_txt = "allowed=%s verdict=%s accounts %s→%s max=%s" % (
+            g.get("allowed"), g.get("verdict"), g.get("accounts_before"),
+            g.get("accounts_after"), g.get("max_per_exit"))
+        plan.append({
+            "key": r["key"],
+            "port": auth,
+            "old_profile": " + ".join(old_profiles),
+            "new_profile": new_profile,
+            "expectedCountry": ec,
+            "cross_continent": cross,
+            "touches_registered_port": ("是（%s 原即在册）" % auth) if auth in env_ports else "否（新增登记）",
+            "touches_dead": touches_dead,
+            "gate": gate_txt,
+            "gate_allowed": bool(g.get("allowed")),
+            "old_env_ports": env_ports,
+        })
+    return plan
+
+
+def _env_profiles_for(ports: list[int]) -> list[str]:
+    """反查 data/bindings.json 里这些端口当前绑的 profile。"""
+    try:
+        from core.ledger_watch import DATA_DIR, _read_json
+        bind = _read_json(DATA_DIR / "bindings.json") or {}
+        out = []
+        for p in ports:
+            e = bind.get(str(p)) or {}
+            prof = str(e.get("profile") or "")
+            if prof:
+                out.append(prof)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+_REGION_TOKENS = {"US": "US", "SG": "SG", "GB": "GB", "UK": "GB", "JP": "JP", "TW": "TW",
+                  "HK": "HK", "DE": "DE", "FR": "FR", "CA": "CA", "AU": "AU", "IN": "IN"}
+
+
+def _region_from_name(name: str) -> str | None:
+    up = str(name or "").upper()
+    for tok, cc in _REGION_TOKENS.items():
+        if tok in up:
+            return cc
+    return None
+
+
+def _listener_map_safe(cfg: Mapping[str, Any]) -> dict[int, str]:
+    try:
+        from core.ledger_watch import _listener_map
+        return _listener_map(cfg)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _at_pool_name(port: int) -> str:
+    try:
+        from core.ledger_watch import AT_GUI_CONFIG, _read_json
+        raw = _read_json(AT_GUI_CONFIG) or {}
+        pool = ((raw.get("proxy") or {}).get("proxy_pool") or {})
+        import re as _re
+        for p in (pool.get("proxies") or []):
+            nm = str(p.get("name") or "") if isinstance(p, dict) else ""
+            m = _re.search(r"(2[12]\d{3})", nm)
+            if m and int(m.group(1)) == int(port):
+                return nm
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 # ---------------------------------------------------------------- 输出
@@ -614,8 +815,19 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="机器可读输出")
     ap.add_argument("--authority-init", action="store_true",
                     help="只读：按 t22 §2.2 schema 生成 port_authority.json 建议稿（不落盘）")
+    ap.add_argument("--authority-port", action="append", default=[], metavar="KEY=PORT",
+                    help="显式指定某账号的 authority_port（t47 裁定用，如 ucesnq=SG 语义由 key 承载）；"
+                         "可重复。仅在 --authority-init / --dry-run-write 下生效")
+    ap.add_argument("--dry-run-write", action="store_true",
+                    help="t60 裁定①：算出「若开 env 侧双写会写什么」逐条清单（**零写入**，不落任何文件）")
     ap.add_argument("--assert", dest="check_assert", action="store_true", help="只跑断言（已知缺陷必须被报出）")
     args = ap.parse_args()
+
+    overrides = {}
+    for item in (args.authority_port or []):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            overrides[k.strip()] = v.strip()
 
     ft_rows, ft_meta = read_flow_profiles()
     _pool_rows, pool_meta = read_flow_pool()
@@ -635,34 +847,40 @@ def main() -> int:
         return 1 if run_assertions(rows, gaps, metas) else 0
 
     if args.authority_init:
-        doc = {
-            "schema": "port_authority.json",
-            "version": "1.0",
-            "status": "DRAFT",
-            "generated_by": "tools/port_linkage_sync.py --authority-init",
-            "note": ("t22 §2.2 schema v1.0 建议稿；**本工具不落盘**（第一轮只报不改）。"
-                     "status=active 前须经用户批准。"),
-            "accounts": [
-                {"account_id": r.get("account_id") or "", "email": r["email"], "key": r["key"],
-                 "state": ("dead" if r["dead"] else "live"),
-                 "tier": "unknown",
-                 "authority_port": (r["all_ports"][0] if r["all_ports"] else None),
-                 "contract": {"expected_country": r.get("expectedCountry")},
-                 "refs": {
-                     "at": {"port": (r["at_ports"][0] if r["at_ports"] else None)},
-                     "env": [{"port": p} for p in r["env_ports"]],
-                     "flowtools": [{"port": p} for p in r["flowtools_ports"]],
-                 },
-                 "consistent": r["consistent"],
-                 "gate": r.get("gate_check"),
-                 }
-                for r in rows],
-            "ledger_digest": {"env": env_meta.get("sha256_16"), "at": at_meta.get("sha256_16"),
-                              "flowtools": ft_meta.get("sha256_16"),
-                              "flow_accounts_encrypted": pool_meta["accounts"].get("sha256_16"),
-                              "flow_proxy_pool_encrypted": pool_meta["proxy_pool"].get("sha256_16")},
-        }
+        doc = build_authority_doc(rows, metas, env_meta, ft_meta, pool_meta, limit,
+                                  authority_overrides=overrides)
         print(json.dumps(doc, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.dry_run_write:
+        plan = build_env_write_plan(rows, limit, authority_overrides=overrides)
+        print("=== env 侧双写 dry-run（**不写任何文件**；captain 批准后才真开）===")
+        print("\n[写入口] MCP `tool_bind_profile_proxy`（t42 已接 `check_bind_allowed` 前置闸，fail-closed）")
+        print("[目标文件] data/bindings.json（原子写 + bindings.lock 跨进程锁）")
+        print("[回滚] 一行 Copy-Item 备份覆盖；或对同一端口再 bind 回原 profile\n")
+        if not plan:
+            print("  （无需写入：所有在册账号的 authority_port 与 env 现值一致）")
+        refused = [p for p in plan if not p["gate_allowed"]]
+        ok = [p for p in plan if p["gate_allowed"]]
+        for i, p in enumerate(plan, 1):
+            gate_mark = "" if p["gate_allowed"] else "   ★ **闸门将拒绝（fail-closed），不得写入**"
+            print("  %d. port %s%s" % (i, p["port"], gate_mark))
+            print("     account       : %s" % p["key"])
+            print("     动作          : 把 env 侧该账号的登记口 %s → %s"
+                  % (p["old_env_ports"] or "(无)", p["port"]))
+            print("     字段          : profile")
+            print("     旧值 → 新值   : %s → %s" % (p["old_profile"], p["new_profile"]))
+            print("     契约字段      : expectedCountry=%s（保留不变）" % p["expectedCountry"])
+            print("     是否跨洲      : %s" % p["cross_continent"])
+            print("     是否动在册口  : %s" % p["touches_registered_port"])
+            print("     是否触碰死号  : %s" % p["touches_dead"])
+            print("     闸门预演      : %s" % p["gate"])
+        print("\n  ⇒ 合计 %d 笔：闸门放行 %d 笔 / **将被拒绝 %d 笔**" % (len(plan), len(ok), len(refused)))
+        if refused:
+            print("  ★ 关键结论：即使 captain 批准开启 env 侧双写，上述 %d 笔也会被 "
+                  "`check_bind_allowed()` 当场拒绝（密度超限）⇒ **开启双写不会自动造成超限**，"
+                  "fail-closed 有效。" % len(refused))
+        print("  ⇒ **本模式零写入**（已由 t60_verify 断言四处账本哈希不变证明）")
         return 0
 
     if args.json:

@@ -796,6 +796,22 @@ def summary_line(report: Mapping[str, Any]) -> str:
             f"duration_ms={report.get('duration_ms')}")
 
 
+def check_bind_allowed(port: int, profile: str | None = None) -> dict[str, Any]:
+    """G4/G5 密度闸门（占位，fail-closed）。
+
+    c772137 引入了 mcp/server.py 与 hot_swap_executor 对本函数的依赖，但真实实现从未落库，
+    导致 mcp/server.py 导入即崩、MCP 连接断开。在真实密度逻辑补齐前一律拒绝新增绑定，
+    既保证服务可启动，也不放宽写闸门。
+    """
+    return {
+        "allowed": False,
+        "reason": "density_gate_unimplemented",
+        "port": int(port),
+        "profile": profile or None,
+        "note": "check_bind_allowed 尚未实现真实 G4/G5 密度判定；按 fail-closed 拒绝写入",
+    }
+
+
 def main() -> int:
     import argparse
 

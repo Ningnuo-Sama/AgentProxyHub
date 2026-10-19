@@ -387,12 +387,10 @@ def read_magi_confidence():
 
 def read_sentry_report():
     magi = read_magi_confidence()
-    from core.personal_lifecycle import status as route_status
-    try:
-        r_stat = route_status(force=False)
-    except Exception:
-        r_stat = {'active': True}
-    
+    # 个人出海已于 2026-10-19 下线（core/personal_*.py 已移除）。
+    # GATE-01 现在只反映业务内核状态，不再有"个人出海/区域守备"二态。
+    r_stat = {'active': False, 'retired': True}
+
     bindings_file = Path(os.environ.get('APHUB_DATA_DIR', r'D:\Program Files\AgentProxyHub\data')) / 'bindings.json'
     b_count = 0
     if bindings_file.exists():
@@ -414,11 +412,11 @@ def read_sentry_report():
         'gates': [
             {
                 'gate_id': 'GATE-01',
-                'name': '智能出海引流主閘 [EGRESS TUN GATE]',
+                'name': '業務端口池健康 [BUSINESS POOL GATE]',
                 'status': 'PASS',
                 'score': 100,
-                'summary': 'TUN 虛擬網卡引流已激活 · 境內外分流隔離率 100%',
-                'details': f"模式: {'智能出海 (AUTO-POOL)' if r_stat.get('active') else '區域守備 (DIRECT)'} · 封包校驗合格"
+                'summary': f'{b_count} 個業務綁定在用 · 個人出海已下線（無 TUN 搶佔路由）',
+                'details': '模式: 業務端口池直出 (SOCKS/HTTP ONLY) · 個人出海 TUN 已於 2026-10-19 移除'
             },
             {
                 'gate_id': 'GATE-02',
@@ -525,7 +523,6 @@ def _scheduled_task_state():
         return _TASK_CACHE['value']
     result = {}
     for key, task in (('mihomo_watchdog', 'AgentProxyHub-mihomo-watchdog'),
-                      ('personal_watchdog', 'AgentProxyHub-Personal-TUN-Watchdog'),
                       ('xingchen_refresh', 'AgentProxyHub-xingchen-profile-refresh')):
         try:
             import subprocess
@@ -620,7 +617,6 @@ def read_topology_v2():
         'antigravity': {'status': probes['gemini']['status'], 'detail': '多账号轮询网关'},
         'flowtools': {'status': probes['flow']['status'], 'detail': '谷歌号池媒体网关'},
         'cliproxy': {'status': _probe_port(8318)['status'], 'detail': '本地渠道聚合'},
-        'tun': {'status': _probe_port(21919)['status'], 'detail': '个人出海内核（常关）'},
         'eva': {'status': 'online', 'detail': '8767 适配层 / 8768 前端'},
         'pet': {'status': probes['pet']['status'], 'detail': 'Live2D 桌宠通知'},
         'hermes': {'status': 'configured', 'detail': 'iLink 微信告警'},
@@ -826,25 +822,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/recovery':
             return self.send_json(200, tool_kernel_recovery({'ports': body.get('ports') or [21001, 21008, 22002, 21909]}))
         if path == '/api/route':
-            # 个人出海已于 2026-10-19 下线：与 ClaudeSafeTun 并存会造成双 TUN 争抢默认路由与 DNS。
-            # 保留 status/stop（供观测与清理残留），开启类动作一律拒绝。
+            # 个人出海已于 2026-10-19 下线（core/personal_*.py 与 personal/ 内核已移除）。
+            # 出海走蜂窝（FlClash），AgentProxyHub 只提供 125 个业务 SOCKS/HTTP 端口。
+            # 本端点保留只读状态，开关类动作一律拒绝，避免旧前端误解为可用。
             action = str(body.get('action') or body.get('state') or '').lower()
-            from core.personal_lifecycle import PERSONAL_TUN_RETIRED, start, stop, status, toggle
-            if action == 'toggle':
-                st = status(force=True)
-                res = stop() if st.get('active') else start()
-                after = status(force=True)
-                return self.send_json(200, {'ok': True, 'action': 'toggle', 'result': res, 'state': after,
-                                            'retired': PERSONAL_TUN_RETIRED})
-            if action in {'start', 'on', 'enable'}:
-                return self.send_json(200, start())
-            if action in {'stop', 'off', 'disable'}:
-                result = stop()
-                return self.send_json(200, result)
+            retired = {'ok': False, 'code': 'personal_tun_retired',
+                       'label': '个人出海已下线',
+                       'reason': '个人出海 TUN 已于 2026-10-19 移除；出海请使用蜂窝（FlClash）。'}
             if action in {'status', 'query', ''}:
-                st = status()
-                return self.send_json(200, {**st, 'retired': PERSONAL_TUN_RETIRED})
-            return self.send_json(400, {'ok': False, 'code': 'invalid_route_action', 'allowed': ['start', 'stop', 'toggle', 'status']})
+                return self.send_json(200, {'ok': True, 'active': False, 'retired': True,
+                                            'personal_kernel': 'removed'})
+            if action in {'start', 'on', 'enable', 'toggle', 'stop', 'off', 'disable'}:
+                return self.send_json(200, retired)
+            return self.send_json(400, {'ok': False, 'code': 'invalid_route_action', 'allowed': ['status']})
         if path == '/api/command':
             command = str(body.get('command') or '').strip().lower()
             if command not in ALLOWED_COMMANDS: return self.send_json(403, {'ok': False, 'code':'command_not_allowed', 'allowed': sorted(ALLOWED_COMMANDS)})
@@ -858,10 +848,9 @@ class Handler(BaseHTTPRequestHandler):
             if command in {'sentry', 'sentry_report'}: return self.send_json(200, read_sentry_report())
             if command in {'clean', 'orphans'}: return self.send_json(200, {'ok': True, 'result': tool_jingguanjia_orphan({'action': 'clean_all_safe_orphans'})})
             if command == 'route':
-                from core.personal_route import status, start, stop
-                st = status(force=True)
-                res = stop() if st.get('active') else start()
-                return self.send_json(200, {'ok': True, 'action': 'toggle', 'result': res})
+                return self.send_json(200, {'ok': False, 'code': 'personal_tun_retired',
+                                            'label': '个人出海已下线',
+                                            'reason': '个人出海 TUN 已于 2026-10-19 移除；出海请使用蜂窝（FlClash）。'})
             from core.model_usage import usage_summary
             return self.send_json(200, usage_summary())
         if path == '/api/complete':

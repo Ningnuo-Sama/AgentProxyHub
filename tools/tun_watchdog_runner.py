@@ -58,26 +58,14 @@ def collect(controller, baseline_ports):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--once', action='store_true')
-    parser.add_argument('--personal', action='store_true', help='仅监护固定个人控制器21919')
     parser.add_argument('--interval', type=float, default=5)
     args = parser.parse_args()
     if args.interval < 3:
         parser.error('interval must be at least 3 seconds')
-    if args.personal and not Path(r'D:\Program Files\AgentProxyHub\personal\config.yaml').exists():
-        parser.error('personal configuration missing')
-    personal_guard = None
-    if args.personal:
-        from core.kernel_control import stop_personal_kernel
-        from core.personal_watchdog import PersonalControllerGuard
-        controller = TunController(Path(r'D:\Program Files\AgentProxyHub\personal\config.yaml'))
-        if controller.base != 'http://127.0.0.1:21919':
-            parser.error('personal controller must be loopback 21919')
-        personal_guard = PersonalControllerGuard(stop_personal_kernel)
-    else:
-        controller = TunController()
+    # 个人出海已于 2026-10-19 移除，--personal 分支连同 core/personal_*.py 一并下线。
+    controller = TunController()
     baseline = [p for p in (8001, 8045, 8767) if tcp_probe('127.0.0.1', p)]
-    # 个人模式故障退出只针对个人进程，不热重载业务配置。
-    dog = TunWatchdog(stop_personal_kernel if args.personal else controller.disable_tun)
+    dog = TunWatchdog(controller.disable_tun)
     stop = threading.Event()
     # 退出看门狗前不主动复活内核；人工闩锁由共享文件持续生效。
     if is_halted():
@@ -86,22 +74,8 @@ def main():
     try:
         while True:
             try:
-                if args.personal:
-                    from core.personal_route_state import desired_on
-                    if not desired_on():
-                        state = controller.status()
-                        result = stop_personal_kernel() if state.get('tun_enabled') is True else None
-                        print(json.dumps({'controller': state, 'decision': {'action': 'personal_desired_off', 'restart': False, 'stop_result': result}}, ensure_ascii=False), flush=True)
-                        if args.once:
-                            return 0
-                        stop.wait(args.interval)
-                        continue
                 evidence, state = collect(controller, baseline)
                 decision = dog.observe(evidence)
-                if personal_guard is not None:
-                    guard_decision = personal_guard.observe(state, manual_halt=is_halted())
-                    if guard_decision['action'] == 'stop_personal_on_controller_loss':
-                        decision = guard_decision
                 print(json.dumps({'controller': state, 'decision': decision}, ensure_ascii=False), flush=True)
             except Exception as exc:
                 # 未知采样异常不能擅自停掉业务；明示监护降级，不无限吞错。
